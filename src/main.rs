@@ -15,7 +15,6 @@ mod request_items;
 mod session;
 mod to_curl;
 mod utils;
-mod vendored;
 
 use std::env;
 use std::fs::File;
@@ -34,6 +33,7 @@ use reqwest::header::{
     HeaderValue, ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_TYPE, COOKIE, RANGE, USER_AGENT,
 };
 use reqwest::tls;
+use reqwest_cookie_store::CookieStoreMutex;
 use url::Host;
 use utils::reason_phrase;
 
@@ -46,7 +46,6 @@ use crate::printer::Printer;
 use crate::request_items::{Body, FORM_CONTENT_TYPE, JSON_ACCEPT, JSON_CONTENT_TYPE};
 use crate::session::Session;
 use crate::utils::{test_mode, test_pretend_term, url_with_query};
-use crate::vendored::reqwest_cookie_store;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
 compile_error!("Either native-tls or rustls feature must be enabled!");
@@ -281,7 +280,7 @@ fn run(args: Cli) -> Result<i32> {
         None => client,
     };
 
-    let cookie_jar = Arc::new(reqwest_cookie_store::CookieStoreMutex::default());
+    let cookie_jar = Arc::new(CookieStoreMutex::default());
     client = client.cookie_provider(cookie_jar.clone());
 
     client = match (args.ipv4, args.ipv6) {
