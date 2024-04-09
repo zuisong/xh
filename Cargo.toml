@@ -36,6 +36,7 @@ once_cell = "1.8.0"
 os_display = "0.1.3"
 pem = "3.0"
 regex-lite = "0.1.5"
+reqwest_cookie_store = "0.7.0"
 roff = { version = "0.2.1", optional = true }
 rpassword = "7.2.0"
 serde = { version = "1.0", features = ["derive"] }
