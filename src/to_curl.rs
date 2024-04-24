@@ -1,13 +1,12 @@
-use std::io::{stderr, stdout, Write};
-
 use anyhow::{anyhow, Context, Result};
 use os_display::Quotable;
-use reqwest::{tls, Method};
+use reqwest::{Method, tls};
 use std::ffi::OsString;
+use std::io::{stderr, stdout, Write};
 
 use crate::cli::{AuthType, Cli, HttpVersion, Verify};
-use crate::request_items::{Body, RequestItem, FORM_CONTENT_TYPE, JSON_ACCEPT, JSON_CONTENT_TYPE};
-use crate::utils::{url_with_query, HeaderValueExt};
+use crate::request_items::{Body, FORM_CONTENT_TYPE, JSON_ACCEPT, JSON_CONTENT_TYPE, RequestItem};
+use crate::utils::HeaderValueExt;
 
 pub fn print_curl_translation(args: Cli) -> Result<()> {
     let cmd = translate(args)?;
@@ -279,13 +278,18 @@ pub fn translate(args: Cli) -> Result<Command> {
         // ours so we can ignore the None case
     }
 
-    let url = url_with_query(args.url, &args.request_items.query()?);
+    let url = args.url;
 
     if url.as_str().contains(['[', ']', '{', '}']) {
         cmd.opt("-g", "--globoff")
     }
 
     cmd.arg(url.to_string());
+
+    for (name, value) in &args.request_items.query()? {
+        cmd.arg("--url-query");
+        cmd.arg(format!("{}={}", name, value));
+    }
 
     // Force ipv4/ipv6 options
     match (args.ipv4, args.ipv6) {
@@ -482,11 +486,11 @@ mod tests {
             ),
             (
                 "xh --https httpbin.org/get x==3",
-                "curl 'https://httpbin.org/get?x=3'",
+                "curl https://httpbin.org/get --url-query 'x=3'",
             ),
             (
                 "xhs httpbin.org/get x==3",
-                "curl 'https://httpbin.org/get?x=3'",
+                "curl https://httpbin.org/get --url-query 'x=3'",
             ),
             (
                 "xh -h httpbin.org/get",
