@@ -16,11 +16,11 @@ exclude = ["assets/xhs", "assets/xhs.1.gz"]
 
 [dependencies]
 anyhow = "1.0.38"
-brotli = { version = "3.3.0", default-features = false, features = ["std"] }
+brotli = { version = "6.0.0", default-features = false, features = ["std"] }
 chardetng = "0.1.15"
 clap = { version = "4.4", features = ["derive", "wrap_help", "string"] }
 clap_complete = { version = "4.4", optional = true }
-cookie_store = { version = "0.20.0", features = ["preserve_order"] }
+cookie_store = { version = "0.21.0", features = ["preserve_order"] }
 digest_auth = "0.3.0"
 dirs = "5.0"
 encoding_rs = "0.8.28"
@@ -37,7 +37,7 @@ once_cell = "1.8.0"
 os_display = "0.1.3"
 pem = "3.0"
 regex-lite = "0.1.5"
-reqwest_cookie_store = "0.7.0"
+reqwest_cookie_store = "0.8.0"
 roff = { version = "0.2.1", optional = true }
 rpassword = "7.2.0"
 serde = { version = "1.0", features = ["derive"] }
