@@ -16,7 +16,7 @@ exclude = ["assets/xhs", "assets/xhs.1.gz"]
 
 [dependencies]
 anyhow = "1.0.38"
-brotli = { version = "6.0.0", default-features = false, features = ["std"] }
+brotli = { version = "7.0.0", default-features = false, features = ["std"] }
 chardetng = "0.1.15"
 clap = { version = "4.4", features = ["derive", "wrap_help", "string"] }
 clap_complete = { version = "4.4", optional = true }
@@ -54,7 +54,7 @@ env_logger = { version = "0.11.3", default-features = false, features = ["color"
 log = "0.4.21"
 
 [dependencies.reqwest]
-version = "0.12.3"
+version = "0.12.7"
 default-features = false
 features = ["json", "multipart", "blocking", "socks", "cookies", "http2", "macos-system-configuration"]
 
