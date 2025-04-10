@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{GzDecoder, ZlibDecoder};
-use reqwest::header::{HeaderMap, CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, TRANSFER_ENCODING};
 use ruzstd::{FrameDecoder, StreamingDecoder as ZstdDecoder};
 
 #[derive(Debug, Clone, Copy)]
@@ -212,7 +212,7 @@ pub fn decompress(
 #[allow(clippy::large_enum_variant)]
 enum LazyZstdDecoder<R: Read> {
     Uninit(Option<R>),
-    Init(ZstdDecoder<R, FrameDecoder>),
+    Init(Box<ZstdDecoder<R, FrameDecoder>>),
 }
 
 impl<R: Read> Read for LazyZstdDecoder<R> {
@@ -221,7 +221,7 @@ impl<R: Read> Read for LazyZstdDecoder<R> {
             LazyZstdDecoder::Uninit(reader) => match reader.take() {
                 Some(reader) => match ZstdDecoder::new(reader) {
                     Ok(decoder) => {
-                        *self = LazyZstdDecoder::Init(decoder);
+                        *self = LazyZstdDecoder::Init(Box::new(decoder));
                         self.read(buf)
                     }
                     Err(err) => Err(io::Error::other(err)),
@@ -250,9 +250,10 @@ mod tests {
         match reader.read_to_end(&mut buffer) {
             Ok(_) => unreachable!("gzip should fail to decompress an uncompressed data"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .starts_with("error decoding gzip response body"))
+                assert!(
+                    e.to_string()
+                        .starts_with("error decoding gzip response body")
+                )
             }
         }
     }
