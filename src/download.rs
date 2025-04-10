@@ -3,18 +3,18 @@ use std::io::{self, ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use mime2ext::mime2ext;
 use regex_lite::Regex;
 use reqwest::{
-    blocking::Response,
-    header::{HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
     StatusCode,
+    blocking::Response,
+    header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, HeaderMap},
 };
 
 use crate::decoder::{decompress, get_compression_type};
-use crate::utils::{copy_largebuf, test_pretend_term, HeaderValueExt};
+use crate::utils::{HeaderValueExt, copy_largebuf, test_pretend_term};
 
 fn get_content_length(headers: &HeaderMap) -> Option<u64> {
     headers
