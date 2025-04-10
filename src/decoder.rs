@@ -211,7 +211,7 @@ pub fn decompress(
 /// We need to delay construction until [Read] so read errors stay read errors.
 enum LazyZstdDecoder<R: Read> {
     Uninit(Option<R>),
-    Init(ZstdDecoder<R, FrameDecoder>),
+    Init(Box<ZstdDecoder<R, FrameDecoder>>),
 }
 
 impl<R: Read> Read for LazyZstdDecoder<R> {
@@ -220,7 +220,7 @@ impl<R: Read> Read for LazyZstdDecoder<R> {
             LazyZstdDecoder::Uninit(reader) => match reader.take() {
                 Some(reader) => match ZstdDecoder::new(reader) {
                     Ok(decoder) => {
-                        *self = LazyZstdDecoder::Init(decoder);
+                        *self = LazyZstdDecoder::Init(Box::new(decoder));
                         self.read(buf)
                     }
                     Err(err) => Err(io::Error::other(err)),
@@ -262,7 +262,7 @@ mod tests {
         struct SadReader;
         impl Read for SadReader {
             fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "oh no!"))
+                Err(io::Error::other("oh no!"))
             }
         }
 
