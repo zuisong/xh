@@ -10,10 +10,10 @@ pub fn parse_filename_from_content_disposition(content_disposition: &str) -> Opt
 
     // First try to find filename* parameter
     for part in parts.iter() {
-        if let Some(value) = part.strip_prefix("filename*=") {
-            if let Some(filename) = parse_encoded_filename(value) {
-                return Some(filename);
-            }
+        if let Some(value) = part.strip_prefix("filename*=")
+            && let Some(filename) = parse_encoded_filename(value)
+        {
+            return Some(filename);
         }
     }
 

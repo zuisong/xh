@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::header::HeaderMap;
@@ -284,8 +285,8 @@ impl Session {
                     cookie_store::RawCookie::build((cookie.name.clone(), cookie.value.clone()));
 
                 if let Some(expires) = cookie.expires {
-                    cookie_builder =
-                        cookie_builder.expires(time::OffsetDateTime::from_unix_timestamp(expires)?);
+                    let time = SystemTime::from(jiff::Timestamp::from_second(expires)?);
+                    cookie_builder = cookie_builder.expires(Some(time.into()));
                 }
                 if let Some(path) = &cookie.path {
                     cookie_builder = cookie_builder.path(path.clone());

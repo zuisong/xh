@@ -545,10 +545,10 @@ fn run(args: Cli) -> Result<ExitCode> {
         }
 
         if let Some(auth) = &auth {
-            if let Some(ref mut s) = session {
-                if save_auth_in_session {
-                    s.save_auth(auth);
-                }
+            if let Some(ref mut s) = session
+                && save_auth_in_session
+            {
+                s.save_auth(auth);
             }
             request_builder = match auth {
                 Auth::Basic(username, password) => {
