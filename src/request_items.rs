@@ -195,11 +195,11 @@ fn rsplit_once_any<'a>(
     let mut res = None;
     let mut best = 0;
     for &delim in delimiters {
-        if let Some(pos) = text.rfind(delim) {
-            if pos >= best {
-                best = pos;
-                res = Some((&text[..pos], delim, &text[pos + delim.len()..]));
-            }
+        if let Some(pos) = text.rfind(delim)
+            && pos >= best
+        {
+            best = pos;
+            res = Some((&text[..pos], delim, &text[pos + delim.len()..]));
         }
     }
     res
@@ -292,7 +292,7 @@ impl RequestItems {
         Ok((headers, headers_to_unset))
     }
 
-    pub fn query(&self) -> Result<Vec<(&str, Cow<'_, str>)>> {
+    pub fn query(&'_ self) -> Result<Vec<(&'_ str, Cow<'_, str>)>> {
         let mut query: Vec<(&str, Cow<str>)> = vec![];
         for item in &self.items {
             if let RequestItem::UrlParam(key, value) = item {

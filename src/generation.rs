@@ -54,7 +54,6 @@ complete -c {bin_name} -n 'string match -qr "@" -- (commandline -ct)' -kxa "(__{
 
 fn generate_manpages(app: &mut clap::Command) {
     use roff::{Roff, bold, italic, roman};
-    use time::OffsetDateTime as DateTime;
 
     let items: Vec<_> = app.get_arguments().filter(|i| !i.is_hide_set()).collect();
 
@@ -200,11 +199,11 @@ fn generate_manpages(app: &mut clap::Command) {
     let current_date = {
         // https://reproducible-builds.org/docs/source-date-epoch/
         let now = match std::env::var("SOURCE_DATE_EPOCH") {
-            Ok(val) => DateTime::from_unix_timestamp(val.parse::<i64>().unwrap()).unwrap(),
-            Err(_) => DateTime::now_utc(),
+            Ok(val) => jiff::Timestamp::from_second(val.parse::<i64>().unwrap()).unwrap(),
+            Err(_) => jiff::Timestamp::now(),
         };
-        let (year, month, day) = now.date().to_calendar_date();
-        format!("{}-{:02}-{:02}", year, u8::from(month), day)
+        let date = now.to_zoned(jiff::tz::TimeZone::UTC);
+        format!("{}-{:02}-{:02}", date.year(), date.month(), date.day())
     };
 
     manpage = manpage.replace("{{date}}", &current_date);

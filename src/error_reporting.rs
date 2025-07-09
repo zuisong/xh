@@ -19,10 +19,9 @@ pub(crate) fn additional_messages(err: &anyhow::Error, native_tls: bool) -> Vec<
 /// Other rustls error messages (e.g. wrong host) are readable enough.
 #[cfg(feature = "rustls")]
 fn format_rustls_error(err: &anyhow::Error) -> Option<String> {
-    use humantime::format_duration;
+    use jiff::{SpanRound, Timestamp, Unit};
     use rustls::CertificateError;
     use rustls::pki_types::UnixTime;
-    use time::OffsetDateTime;
 
     // Multiple layers of io::Error for some reason?
     // This may be fragile
@@ -33,25 +32,32 @@ fn format_rustls_error(err: &anyhow::Error) -> Option<String> {
         return None;
     };
 
-    fn conv_time(unix_time: &UnixTime) -> Option<OffsetDateTime> {
-        OffsetDateTime::from_unix_timestamp(unix_time.as_secs() as i64).ok()
+    fn conv_time(unix_time: &UnixTime) -> Option<Timestamp> {
+        Timestamp::from_second(unix_time.as_secs() as i64).ok()
     }
 
+    let span_round = SpanRound::new()
+        .days_are_24_hours()
+        .largest(Unit::Day)
+        .smallest(Unit::Second);
     match err {
         CertificateError::ExpiredContext { time, not_after } => {
             let time = conv_time(time)?;
             let not_after = conv_time(not_after)?;
-            let diff = format_duration((time - not_after).try_into().ok()?);
+            let diff = time - not_after;
+
             Some(format!(
-                "Certificate not valid after {not_after} ({diff} ago).",
+                "Certificate not valid after {not_after} ({:#} ago).",
+                diff.round(span_round).ok()?
             ))
         }
         CertificateError::NotValidYetContext { time, not_before } => {
             let time = conv_time(time)?;
             let not_before = conv_time(not_before)?;
-            let diff = format_duration((not_before - time).try_into().ok()?);
+            let diff = not_before - time;
             Some(format!(
-                "Certificate not valid before {not_before} ({diff} from now).",
+                "Certificate not valid before {not_before} ({:#} from now).",
+                diff.round(span_round).ok()?
             ))
         }
         _ => None,
@@ -59,10 +65,10 @@ fn format_rustls_error(err: &anyhow::Error) -> Option<String> {
 }
 
 pub(crate) fn exit_code(err: &anyhow::Error) -> ExitCode {
-    if let Some(err) = err.downcast_ref::<reqwest::Error>() {
-        if err.is_timeout() {
-            return ExitCode::from(2);
-        }
+    if let Some(err) = err.downcast_ref::<reqwest::Error>()
+        && err.is_timeout()
+    {
+        return ExitCode::from(2);
     }
 
     if err
