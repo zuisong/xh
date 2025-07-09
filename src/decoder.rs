@@ -6,7 +6,7 @@ use std::str::FromStr;
 use brotli::Decompressor as BrotliDecoder;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use reqwest::header::{CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, TRANSFER_ENCODING};
-use ruzstd::{FrameDecoder, StreamingDecoder as ZstdDecoder};
+use ruzstd::decoding::{FrameDecoder, StreamingDecoder as ZstdDecoder};
 
 #[derive(Debug, Clone, Copy)]
 pub enum CompressionType {
@@ -47,12 +47,11 @@ pub fn get_compression_type(headers: &HeaderMap) -> Option<CompressionType> {
             .find_map(|value| value.to_str().ok().and_then(|value| value.parse().ok()));
     }
 
-    if compression_type.is_some() {
-        if let Some(content_length) = headers.get(CONTENT_LENGTH) {
-            if content_length == "0" {
-                return None;
-            }
-        }
+    if compression_type.is_some()
+        && let Some(content_length) = headers.get(CONTENT_LENGTH)
+        && content_length == "0"
+    {
+        return None;
     }
 
     compression_type

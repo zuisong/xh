@@ -62,11 +62,11 @@ fn get_file_name(response: &Response, orig_url: &reqwest::Url) -> String {
 
     let mut filename = filename.trim().trim_start_matches('.').to_string();
 
-    if !filename.contains('.') {
-        if let Some(extension) = guess_extension(response) {
-            filename.push('.');
-            filename.push_str(extension);
-        }
+    if !filename.contains('.')
+        && let Some(extension) = guess_extension(response)
+    {
+        filename.push('.');
+        filename.push_str(extension);
     }
 
     filename
