@@ -67,8 +67,8 @@ pub fn test_default_color() -> bool {
 pub fn random_string() -> String {
     use rand::Rng;
 
-    rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(10)
         .map(char::from)
         .collect()
