@@ -354,6 +354,9 @@ pub fn translate(args: Cli) -> Result<Command> {
                 cmd.arg("--oauth2-bearer");
                 cmd.arg(auth);
             }
+            AuthType::MessageSignature => {
+                cmd.warn("Message signature authentication is not supported in curl translation");
+            }
         }
     }
 

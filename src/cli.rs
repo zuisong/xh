@@ -252,6 +252,9 @@ Example: --print=Hb"
     /// to authenticate with just a username.
     ///
     /// TOKEN is expected if --auth-type=bearer.
+    ///
+    /// When --auth-type=message-signature the value is treated as private key material
+    /// (use -a @path/to/key to read from a file).
     #[clap(short = 'a', long, value_name = "USER[:PASS] | TOKEN")]
     pub auth: Option<SecretString>,
 
@@ -802,6 +805,9 @@ pub enum AuthType {
     Basic,
     Bearer,
     Digest,
+    /// Message signature per RFC 9421.
+    #[clap(name = "message-signature")]
+    MessageSignature,
 }
 
 #[derive(ValueEnum, Debug, Clone)]

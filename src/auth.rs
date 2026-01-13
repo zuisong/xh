@@ -1,3 +1,4 @@
+use std::fs;
 use std::io;
 
 use anyhow::Result;
@@ -9,13 +10,14 @@ use reqwest::StatusCode;
 use crate::cli::AuthType;
 use crate::middleware::{Context, Middleware};
 use crate::netrc;
-use crate::utils::clone_request;
+use crate::utils::{clone_request, expand_tilde};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Auth {
     Bearer(String),
     Basic(String, Option<String>),
     Digest(String, String),
+    MessageSignature(Vec<u8>),
 }
 
 impl Auth {
@@ -33,6 +35,9 @@ impl Auth {
                 ))
             }
             AuthType::Bearer => Ok(Auth::Bearer(auth.into())),
+            AuthType::MessageSignature => {
+                Ok(Auth::MessageSignature(load_message_signature_key(auth)?))
+            }
         }
     }
 
@@ -41,6 +46,7 @@ impl Auth {
             AuthType::Basic => Some(Auth::Basic(entry.login?, Some(entry.password))),
             AuthType::Bearer => Some(Auth::Bearer(entry.password)),
             AuthType::Digest => Some(Auth::Digest(entry.login?, entry.password)),
+            AuthType::MessageSignature => None,
         }
     }
 }
@@ -57,6 +63,14 @@ pub fn parse_auth(auth: &str, host: &str) -> io::Result<(String, Option<String>)
         let prompt = format!("http: password for {username}@{host}: ");
         let password = rpassword::prompt_password(prompt)?;
         Ok((username, Some(password)))
+    }
+}
+
+fn load_message_signature_key(auth: &str) -> io::Result<Vec<u8>> {
+    if let Some(path) = auth.strip_prefix('@') {
+        fs::read(expand_tilde(path))
+    } else {
+        Ok(auth.as_bytes().to_vec())
     }
 }
 

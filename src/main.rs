@@ -8,6 +8,7 @@ mod download;
 mod error_reporting;
 mod formatting;
 mod generation;
+mod message_signature;
 mod middleware;
 mod nested_json;
 mod netrc;
@@ -553,6 +554,7 @@ fn run(args: Cli) -> Result<ExitCode> {
                 }
                 Auth::Bearer(token) => request_builder.bearer_auth(token),
                 Auth::Digest(..) => request_builder,
+                Auth::MessageSignature(_) => request_builder,
             }
         }
 
@@ -579,6 +581,10 @@ fn run(args: Cli) -> Result<ExitCode> {
 
         for header in &headers_to_unset {
             request.headers_mut().remove(header);
+        }
+
+        if let Some(Auth::MessageSignature(key)) = &auth {
+            message_signature::sign_request(&mut request, key)?;
         }
 
         request

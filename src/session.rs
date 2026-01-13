@@ -245,6 +245,9 @@ impl Session {
                     )))
                 }
                 "bearer" => Ok(Some(auth::Auth::Bearer(raw_auth.into()))),
+                "message-signature" => Err(anyhow!(
+                    "Sessions cannot contain message-signature auth entries"
+                )),
                 _ => Err(anyhow!("Unknown auth type {}", raw_auth)),
             }
         } else {
@@ -272,6 +275,9 @@ impl Session {
                     auth_type: Some("bearer".into()),
                     raw_auth: Some(token.into()),
                 }
+            }
+            auth::Auth::MessageSignature(_) => {
+                // Do not persist message signature keys in session files.
             }
         }
     }
