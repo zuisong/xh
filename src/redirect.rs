@@ -1,10 +1,10 @@
 use anyhow::Result;
-use reqwest::{Request, Response};
+use async_trait::async_trait;
 use reqwest::header::{
     HeaderMap, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Method, Request, Response, StatusCode, Url};
 
 use crate::middleware::{Context, Middleware};
 use crate::utils::{clone_request, HeaderValueExt};
@@ -19,8 +19,13 @@ impl RedirectFollower {
     }
 }
 
+#[async_trait]
 impl Middleware for RedirectFollower {
-    async fn handle(&mut self, mut ctx: Context, mut first_request: Request) -> Result<Response> {
+    async fn handle(
+        &mut self,
+        mut ctx: Context<'_, '_>,
+        mut first_request: Request,
+    ) -> Result<Response> {
         // This buffers the body in case we need it again later
         // reqwest does *not* do this, it ignores 307/308 with a streaming body
         let mut request = clone_request(&mut first_request)?;
@@ -41,7 +46,7 @@ impl Middleware for RedirectFollower {
             log::trace!("{next_request:#?}");
             self.print(&mut ctx, &mut response, &mut next_request)?;
             request = clone_request(&mut next_request)?;
-            response = self.next(&mut ctx, next_request)?;
+            response = self.next(&mut ctx, next_request).await?;
         }
 
         Ok(response)

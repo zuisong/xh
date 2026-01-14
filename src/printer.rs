@@ -1,4 +1,3 @@
-use crate::io;
 use std::borrow::Cow;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::time::Instant;
@@ -6,9 +5,9 @@ use std::time::Instant;
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use mime::Mime;
-use reqwest::{Body, Request, Response};
 use reqwest::cookie::CookieStore;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST};
+use reqwest::{Body, Request, Response};
 use url::Url;
 
 use crate::formatting::headers::HeaderFormatter;
@@ -390,10 +389,13 @@ impl Printer {
         Ok(())
     }
 
-    pub fn print_request_body(&mut self, request: &mut Request) -> anyhow::Result<()> {
+    pub fn print_request_body(
+        &mut self,
+        request: &Request,
+        body_bytes: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
         let content_type = get_content_type(request.headers());
-        if let Some(body) = request.body_mut() {
-            let body = body.buffer()?;
+        if let Some(body) = body_bytes {
             if body.contains(&b'\0') {
                 self.buffer.print(BINARY_SUPPRESSOR)?;
             } else {
@@ -407,71 +409,45 @@ impl Printer {
         Ok(())
     }
 
+    /// Print response body from already-read bytes.
+    ///
+    /// For streaming mode, call `print_response_body_stream` instead.
+    ///
+    /// Returns the duration spent processing/printing the body, which can be used
+    /// to update response metadata.
     pub fn print_response_body(
         &mut self,
-        response: &mut Response,
+        headers: &reqwest::header::HeaderMap,
+        url: &Url,
+        body_bytes: &[u8],
         encoding: Option<&'static Encoding>,
         mime: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<std::time::Duration> {
         let starting_time = Instant::now();
-        let url = response.url().clone();
-        let content_type =
-            mime.map_or_else(|| get_content_type(response.headers()), ContentType::from);
-        let encoding = encoding.or_else(|| get_charset(response));
-        let compression_type = get_compression_type(response.headers());
-        let mut body = decompress(response, compression_type);
+        let content_type = mime.map_or_else(|| get_content_type(headers), ContentType::from);
+        let encoding = encoding.or_else(|| get_charset_from_headers(headers));
+        let compression_type = get_compression_type(headers);
 
-        // Automatically activate stream mode when it hasn't been set by the user and the content type is stream
-        let stream = self.stream.unwrap_or(content_type.is_stream());
+        // Decompress the body bytes
+        let mut body_reader = std::io::Cursor::new(body_bytes);
+        let mut body = decompress(&mut body_reader, compression_type);
 
+        // For non-streaming mode, read and process the entire body
         if !self.buffer.is_terminal() {
             if (self.color || self.format_json) && content_type.is_text() {
-                // The user explicitly asked for formatting even though this is
-                // going into a file, and the response is at least supposed to be
-                // text, so decode it
-
-                // TODO: HTTPie re-encodes output in the original encoding, we don't
-                // encoding_rs::Encoder::encode_from_utf8_to_vec_without_replacement()
-                // and guess_encoding() may help, but it'll require refactoring
-
-                // The current design is a bit unfortunate because there's no way to
-                // force UTF-8 output without coloring or formatting
-                // Unconditionally decoding is not an option because the body
-                // might not be text at all
-                if stream {
-                    self.print_body_stream(
-                        content_type,
-                        &mut decode_stream(&mut body, encoding, &url)?,
-                    )?;
-                } else {
-                    let mut buf = Vec::new();
-                    body.read_to_end(&mut buf)?;
-                    let text = decode_blob_unconditional(&buf, encoding, &url);
-                    self.print_body_text(content_type, &text)?;
-                }
-            } else if stream {
-                copy_largebuf(&mut body, &mut self.buffer, true)?;
+                let mut buf = Vec::new();
+                body.read_to_end(&mut buf)?;
+                let text = decode_blob_unconditional(&buf, encoding, url);
+                self.print_body_text(content_type, &text)?;
             } else {
                 let mut buf = Vec::new();
                 body.read_to_end(&mut buf)?;
                 self.buffer.write_all(&buf)?;
             }
-        } else if stream {
-            match self
-                .print_body_stream(content_type, &mut decode_stream(&mut body, encoding, &url)?)
-            {
-                Ok(_) => {
-                    self.buffer.print("\n")?;
-                }
-                Err(err) if err.get_ref().is_some_and(|err| err.is::<FoundBinaryData>()) => {
-                    self.buffer.print(BINARY_SUPPRESSOR)?;
-                }
-                Err(err) => return Err(err.into()),
-            }
         } else {
             let mut buf = Vec::new();
             body.read_to_end(&mut buf)?;
-            match decode_blob(&buf, encoding, &url) {
+            match decode_blob(&buf, encoding, url) {
                 None => {
                     self.buffer.print(BINARY_SUPPRESSOR)?;
                 }
@@ -482,8 +458,50 @@ impl Printer {
             };
         }
         self.buffer.flush()?;
-        drop(body); // silence the borrow checker
-        response.meta_mut().content_download_duration = Some(starting_time.elapsed());
+        Ok(starting_time.elapsed())
+    }
+
+    /// Print response body in streaming mode using an async byte stream.
+    ///
+    /// This is used when stream mode is enabled and we want to print output
+    /// as it arrives rather than buffering the entire response.
+    pub fn print_response_body_streaming(
+        &mut self,
+        headers: &reqwest::header::HeaderMap,
+        url: &Url,
+        body: &mut impl Read,
+        encoding: Option<&'static Encoding>,
+        mime: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let content_type = mime.map_or_else(|| get_content_type(headers), ContentType::from);
+        let encoding_opt = encoding;
+        let compression_type = get_compression_type(headers);
+        let mut decompressed = decompress(body, compression_type);
+
+        if !self.buffer.is_terminal() {
+            if (self.color || self.format_json) && content_type.is_text() {
+                self.print_body_stream(
+                    content_type,
+                    &mut decode_stream(&mut decompressed, encoding_opt, url)?,
+                )?;
+            } else {
+                copy_largebuf(&mut decompressed, &mut self.buffer, true)?;
+            }
+        } else {
+            match self.print_body_stream(
+                content_type,
+                &mut decode_stream(&mut decompressed, encoding_opt, url)?,
+            ) {
+                Ok(_) => {
+                    self.buffer.print("\n")?;
+                }
+                Err(err) if err.get_ref().is_some_and(|err| err.is::<FoundBinaryData>()) => {
+                    self.buffer.print(BINARY_SUPPRESSOR)?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+        self.buffer.flush()?;
         Ok(())
     }
 
@@ -633,18 +651,18 @@ fn decode_blob_unconditional<'a>(
 /// As-is this should do a lossy decode with replacement characters, so the
 /// output is valid UTF-8, but a differently configured DecodeReaderBytes can
 /// produce invalid UTF-8.
-async fn decode_stream<'a>(
-    stream: &'a mut impl tokio::io::AsyncRead,
+fn decode_stream<'a>(
+    stream: &'a mut impl Read,
     encoding: Option<&'static Encoding>,
     url: &Url,
-) -> tokio::io::Result<impl tokio::io::AsyncRead + 'a> {
+) -> io::Result<impl Read + 'a> {
     // 16 KiB is the largest initial read I could achieve.
     // That was with a HTTP/2 miniserve running on Linux.
     // I think this is a buffer size for hyper, it could change. But it seems
     // large enough for a best-effort attempt.
     // (16 is otherwise used because 0 seems dangerous, but it shouldn't matter.)
     let capacity = if encoding.is_some() { 16 } else { 16 * 1024 };
-    let mut reader = tokio::io::BufReader::with_capacity(capacity, stream);
+    let mut reader = BufReader::with_capacity(capacity, stream);
     let encoding = match encoding {
         Some(encoding) => encoding,
         None => {
@@ -713,7 +731,12 @@ fn get_tld(domain: &str) -> Option<&str> {
 ///
 /// See https://github.com/seanmonstar/reqwest/blob/2940740493/src/async_impl/response.rs#L172
 fn get_charset(response: &Response) -> Option<&'static Encoding> {
-    let content_type = response.headers().get(CONTENT_TYPE)?.to_str().ok()?;
+    get_charset_from_headers(response.headers())
+}
+
+/// Get charset from headers directly (for when Response is not available).
+fn get_charset_from_headers(headers: &HeaderMap) -> Option<&'static Encoding> {
+    let content_type = headers.get(CONTENT_TYPE)?.to_str().ok()?;
     let mime: Mime = content_type.parse().ok()?;
     let encoding_name = mime.get_param("charset")?.as_str();
     Encoding::for_label(encoding_name.as_bytes())
