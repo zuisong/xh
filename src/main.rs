@@ -34,7 +34,7 @@ use cookie_store::{CookieStore, RawCookie};
 use flate2::write::ZlibEncoder;
 use hyper::header::CONTENT_ENCODING;
 use redirect::RedirectFollower;
-use reqwest::blocking::{Body as ReqwestBody, Client};
+use reqwest::{Body as ReqwestBody, Client};
 use reqwest::header::{
     HeaderValue, ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_TYPE, COOKIE, RANGE, USER_AGENT,
 };

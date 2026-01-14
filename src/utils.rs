@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 
 use anyhow::Result;
-use reqwest::blocking::{Request, Response};
+use reqwest::{Request, Response};
 use reqwest::header::HeaderValue;
 use url::Url;
 

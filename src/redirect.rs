@@ -1,5 +1,5 @@
 use anyhow::Result;
-use reqwest::blocking::{Request, Response};
+use reqwest::{Request, Response};
 use reqwest::header::{
     HeaderMap, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, TRANSFER_ENCODING, WWW_AUTHENTICATE,
@@ -20,11 +20,11 @@ impl RedirectFollower {
 }
 
 impl Middleware for RedirectFollower {
-    fn handle(&mut self, mut ctx: Context, mut first_request: Request) -> Result<Response> {
+    async fn handle(&mut self, mut ctx: Context, mut first_request: Request) -> Result<Response> {
         // This buffers the body in case we need it again later
         // reqwest does *not* do this, it ignores 307/308 with a streaming body
         let mut request = clone_request(&mut first_request)?;
-        let mut response = self.next(&mut ctx, first_request)?;
+        let mut response = self.next(&mut ctx, first_request).await?;
         let mut remaining_redirects = self.max_redirects - 1;
 
         while let Some(mut next_request) = get_next_request(request, &response) {

@@ -1,7 +1,8 @@
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use reqwest::blocking::{Client, Request, Response};
+use reqwest::{Client, Request, Response};
 
 #[derive(Clone)]
 pub struct ResponseMeta {
@@ -29,7 +30,7 @@ type Printer<'a, 'b> = &'a mut (dyn FnMut(&mut Response, &mut Request) -> Result
 pub struct Context<'a, 'b> {
     client: &'a Client,
     printer: Option<Printer<'a, 'b>>,
-    middlewares: &'a mut [Box<dyn Middleware + 'b>],
+    middlewares: &'a mut [Pin<Box<dyn Middleware + 'b>>],
 }
 
 impl<'a, 'b> Context<'a, 'b> {
@@ -45,11 +46,11 @@ impl<'a, 'b> Context<'a, 'b> {
         }
     }
 
-    fn execute(&mut self, request: Request) -> Result<Response> {
+   async fn execute(&mut self, request: Request) -> Result<Response> {
         match self.middlewares {
             [] => {
                 let starting_time = Instant::now();
-                let mut response = self.client.execute(request)?;
+                let mut response = self.client.execute(request).await?;
                 response.extensions_mut().insert(ResponseMeta {
                     request_duration: starting_time.elapsed(),
                     content_download_duration: None,
@@ -68,7 +69,7 @@ impl<'a, 'b> Context<'a, 'b> {
 pub trait Middleware {
     fn handle(&mut self, ctx: Context, request: Request) -> Result<Response>;
 
-    fn next(&self, ctx: &mut Context, request: Request) -> Result<Response> {
+    async fn next(&self, ctx: &mut Context, request: Request) -> Result<Response> {
         ctx.execute(request)
     }
 

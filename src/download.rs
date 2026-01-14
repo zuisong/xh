@@ -11,7 +11,7 @@ use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use mime2ext::mime2ext;
 use regex_lite::Regex;
 use reqwest::{
-    blocking::Response,
+    Response,
     header::{HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
     StatusCode,
 };
@@ -253,7 +253,7 @@ pub fn download_file(
         Some(ref pb) => {
             let compression_type = get_compression_type(response.headers());
             copy_largebuf(
-                &mut decompress(&mut pb.wrap_read(response), compression_type),
+                &mut decompress(&mut pb.wrap_read(response.bytes().await), compression_type),
                 &mut buffer,
                 false,
             )?;
@@ -274,7 +274,7 @@ pub fn download_file(
         None => {
             let compression_type = get_compression_type(response.headers());
             copy_largebuf(
-                &mut decompress(&mut response, compression_type),
+                &mut decompress(&mut response  , compression_type),
                 &mut buffer,
                 false,
             )?;

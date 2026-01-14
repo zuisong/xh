@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::{blocking::multipart, Method};
+use reqwest::{multipart, Method};
 
 use crate::cli::BodyType;
 use crate::nested_json;
@@ -512,7 +512,7 @@ pub fn file_to_part(path: impl AsRef<Path>) -> io::Result<multipart::Part> {
         .map(|file_name| file_name.to_string_lossy().to_string());
     let file = File::open(path)?;
     let file_length = file.metadata()?.len();
-    let mut part = multipart::Part::reader_with_length(file, file_length);
+    let mut part = multipart::Part::stream_with_length(reqwest:: Body::from( file.into()), file_length);
     if let Some(file_name) = file_name {
         part = part.file_name(file_name);
     }

@@ -1,3 +1,4 @@
+use crate::io;
 use std::borrow::Cow;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::time::Instant;
@@ -5,7 +6,7 @@ use std::time::Instant;
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use mime::Mime;
-use reqwest::blocking::{Body, Request, Response};
+use reqwest::{Body, Request, Response};
 use reqwest::cookie::CookieStore;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST};
 use url::Url;
@@ -632,18 +633,18 @@ fn decode_blob_unconditional<'a>(
 /// As-is this should do a lossy decode with replacement characters, so the
 /// output is valid UTF-8, but a differently configured DecodeReaderBytes can
 /// produce invalid UTF-8.
-fn decode_stream<'a>(
-    stream: &'a mut impl Read,
+async fn decode_stream<'a>(
+    stream: &'a mut impl tokio::io::AsyncRead,
     encoding: Option<&'static Encoding>,
     url: &Url,
-) -> io::Result<impl Read + 'a> {
+) -> tokio::io::Result<impl tokio::io::AsyncRead + 'a> {
     // 16 KiB is the largest initial read I could achieve.
     // That was with a HTTP/2 miniserve running on Linux.
     // I think this is a buffer size for hyper, it could change. But it seems
     // large enough for a best-effort attempt.
     // (16 is otherwise used because 0 seems dangerous, but it shouldn't matter.)
     let capacity = if encoding.is_some() { 16 } else { 16 * 1024 };
-    let mut reader = BufReader::with_capacity(capacity, stream);
+    let mut reader = tokio::io::BufReader::with_capacity(capacity, stream);
     let encoding = match encoding {
         Some(encoding) => encoding,
         None => {

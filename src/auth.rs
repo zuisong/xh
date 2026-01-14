@@ -2,7 +2,7 @@ use std::io;
 
 use anyhow::Result;
 use regex_lite::Regex;
-use reqwest::blocking::{Request, Response};
+use reqwest::{Request, Response};
 use reqwest::header::{HeaderValue, AUTHORIZATION, WWW_AUTHENTICATE};
 use reqwest::StatusCode;
 
