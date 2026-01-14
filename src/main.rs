@@ -737,16 +737,45 @@ async fn run(args: Cli) -> Result<ExitCode> {
                 let response_headers = response.headers().clone();
                 let response_url = response.url().clone();
 
-                // Read response body bytes (consumes response)
-                let body_bytes = response.bytes().await?;
+                // Check if streaming mode should be used
+                let use_streaming =
+                    printer.should_stream_response(&response_headers, response_mime);
 
-                let _duration = printer.print_response_body(
-                    &response_headers,
-                    &response_url,
-                    &body_bytes,
-                    response_charset,
-                    response_mime,
-                )?;
+                if use_streaming {
+                    // Use streaming mode: convert async stream to sync Read using SyncIoBridge
+                    use futures::StreamExt;
+                    use tokio_util::io::StreamReader;
+
+                    let byte_stream = response.bytes_stream().map(|result| {
+                        result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                    });
+                    let async_reader = StreamReader::new(byte_stream);
+
+                    // Use tokio::task::block_in_place to run sync code on async runtime
+                    tokio::task::block_in_place(|| {
+                        let handle = tokio::runtime::Handle::current();
+                        let _guard = handle.enter();
+                        let mut sync_reader = tokio_util::io::SyncIoBridge::new(async_reader);
+                        printer.print_response_body_streaming(
+                            &response_headers,
+                            &response_url,
+                            &mut sync_reader,
+                            response_charset,
+                            response_mime,
+                        )
+                    })?;
+                } else {
+                    // Non-streaming mode: read entire body first, then print
+                    let body_bytes = response.bytes().await?;
+
+                    let _duration = printer.print_response_body(
+                        &response_headers,
+                        &response_url,
+                        &body_bytes,
+                        response_charset,
+                        response_mime,
+                    )?;
+                }
 
                 if print.response_meta {
                     printer.print_separator()?;

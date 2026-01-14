@@ -61,7 +61,7 @@ tracing = { version = "0.1.41", default-features = false, features = ["log"] }
 percent-encoding = "2.3.1"
 sanitize-filename = "0.6.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "fs", "io-std"] }
-tokio-util = { version = "0.7", features = ["io", "compat"] }
+tokio-util = { version = "0.7", features = ["io-util", "compat"] }
 futures = "0.3"
 async-trait = "0.1"
 

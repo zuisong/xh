@@ -145,6 +145,15 @@ impl Printer {
         }
     }
 
+    /// Check if streaming mode should be used for the given content type.
+    ///
+    /// This determines whether to use streaming output (print as data arrives)
+    /// or buffered output (read all data first, then print).
+    pub fn should_stream_response(&self, headers: &HeaderMap, mime: Option<&str>) -> bool {
+        let content_type = mime.map_or_else(|| get_content_type(headers), ContentType::from);
+        self.stream.unwrap_or(content_type.is_stream())
+    }
+
     fn get_highlighter(&mut self, syntax: &'static str) -> Highlighter<'_> {
         Highlighter::new(syntax, self.theme, &mut self.buffer)
     }
