@@ -60,11 +60,15 @@ rustls = { version = "0.23.25", optional = true, default-features = false, featu
 tracing = { version = "0.1.41", default-features = false, features = ["log"] }
 percent-encoding = "2.3.1"
 sanitize-filename = "0.6.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "fs", "io-std"] }
+tokio-util = { version = "0.7", features = ["io-util", "compat"] }
+futures = "0.3"
+async-trait = "0.1"
 
 [dependencies.reqwest]
 version = "0.13.1"
 default-features = false
-features = ["json", "form", "multipart", "blocking", "socks", "cookies", "http2", "system-proxy"]
+features = ["json", "form", "multipart", "stream", "socks", "cookies", "http2", "system-proxy"]
 
 [dependencies.syntect]
 version = "5.1"

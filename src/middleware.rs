@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use reqwest::blocking::{Client, Request, Response};
+use async_trait::async_trait;
+use reqwest::{Client, Request, Response};
 
 #[derive(Clone)]
 pub struct ResponseMeta {
@@ -24,19 +25,19 @@ impl ResponseExt for Response {
     }
 }
 
-type Printer<'a, 'b> = &'a mut (dyn FnMut(&mut Response, &mut Request) -> Result<()> + 'b);
+type Printer<'a, 'b> = &'a mut (dyn FnMut(&mut Response, &mut Request) -> Result<()> + Send + 'b);
 
 pub struct Context<'a, 'b> {
     client: &'a Client,
     printer: Option<Printer<'a, 'b>>,
-    middlewares: &'a mut [Box<dyn Middleware + 'b>],
+    middlewares: &'a mut [Box<dyn Middleware + Send + 'b>],
 }
 
 impl<'a, 'b> Context<'a, 'b> {
     fn new(
         client: &'a Client,
         printer: Option<Printer<'a, 'b>>,
-        middlewares: &'a mut [Box<dyn Middleware + 'b>],
+        middlewares: &'a mut [Box<dyn Middleware + Send + 'b>],
     ) -> Self {
         Context {
             client,
@@ -45,36 +46,40 @@ impl<'a, 'b> Context<'a, 'b> {
         }
     }
 
-    fn execute(&mut self, request: Request) -> Result<Response> {
+    async fn execute(&mut self, request: Request) -> Result<Response> {
         match self.middlewares {
             [] => {
                 let starting_time = Instant::now();
-                let mut response = self.client.execute(request)?;
+                let mut response = self.client.execute(request).await?;
                 response.extensions_mut().insert(ResponseMeta {
                     request_duration: starting_time.elapsed(),
                     content_download_duration: None,
                 });
                 Ok(response)
             }
-            [ref mut head, tail @ ..] => head.handle(
-                #[allow(clippy::needless_option_as_deref)]
-                Context::new(self.client, self.printer.as_deref_mut(), tail),
-                request,
-            ),
+            [ref mut head, tail @ ..] => {
+                head.handle(
+                    #[allow(clippy::needless_option_as_deref)]
+                    Context::new(self.client, self.printer.as_deref_mut(), tail),
+                    request,
+                )
+                .await
+            }
         }
     }
 }
 
-pub trait Middleware {
-    fn handle(&mut self, ctx: Context, request: Request) -> Result<Response>;
+#[async_trait]
+pub trait Middleware: Send {
+    async fn handle(&mut self, ctx: Context<'_, '_>, request: Request) -> Result<Response>;
 
-    fn next(&self, ctx: &mut Context, request: Request) -> Result<Response> {
-        ctx.execute(request)
+    async fn next(&self, ctx: &mut Context<'_, '_>, request: Request) -> Result<Response> {
+        ctx.execute(request).await
     }
 
     fn print(
         &self,
-        ctx: &mut Context,
+        ctx: &mut Context<'_, '_>,
         response: &mut Response,
         request: &mut Request,
     ) -> Result<()> {
@@ -92,12 +97,12 @@ where
 {
     client: &'a Client,
     printer: Option<T>,
-    middlewares: Vec<Box<dyn Middleware + 'a>>,
+    middlewares: Vec<Box<dyn Middleware + Send + 'a>>,
 }
 
 impl<'a, T> ClientWithMiddleware<'a, T>
 where
-    T: FnMut(&mut Response, &mut Request) -> Result<()> + 'a,
+    T: FnMut(&mut Response, &mut Request) -> Result<()> + Send + 'a,
 {
     pub fn new(client: &'a Client) -> Self {
         ClientWithMiddleware {
@@ -112,17 +117,17 @@ where
         self
     }
 
-    pub fn with(mut self, middleware: impl Middleware + 'a) -> Self {
+    pub fn with(mut self, middleware: impl Middleware + Send + 'a) -> Self {
         self.middlewares.push(Box::new(middleware));
         self
     }
 
-    pub fn execute(&mut self, request: Request) -> Result<Response> {
+    pub async fn execute(&mut self, request: Request) -> Result<Response> {
         let mut ctx = Context::new(
             self.client,
             self.printer.as_mut().map(|p| p as _),
             &mut self.middlewares[..],
         );
-        ctx.execute(request)
+        ctx.execute(request).await
     }
 }

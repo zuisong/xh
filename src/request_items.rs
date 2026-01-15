@@ -1,15 +1,14 @@
 use std::{
     borrow::Cow,
     collections::HashSet,
-    fs::{self, File},
-    io,
+    fs, io,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use anyhow::{anyhow, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::{blocking::multipart, Method};
+use reqwest::{multipart, Method};
 
 use crate::cli::BodyType;
 use crate::nested_json;
@@ -358,7 +357,7 @@ impl RequestItems {
         Ok(Body::Form(text_fields))
     }
 
-    fn body_as_multipart(self) -> Result<Body> {
+    async fn body_as_multipart(self) -> Result<Body> {
         let mut form = multipart::Form::new();
         for item in self.items {
             match item {
@@ -378,7 +377,7 @@ impl RequestItems {
                     file_type,
                     file_name_header,
                 } => {
-                    let mut part = file_to_part(expand_tilde(file_name))?;
+                    let mut part = file_to_part(expand_tilde(file_name)).await?;
                     if let Some(file_type) = file_type {
                         part = part.mime_str(&file_type)?;
                     }
@@ -449,10 +448,10 @@ impl RequestItems {
         Ok(body)
     }
 
-    pub fn body(self) -> Result<Body> {
+    pub async fn body(self) -> Result<Body> {
         match self.body_type {
-            BodyType::Multipart => self.body_as_multipart(),
-            BodyType::Form if self.has_form_files() => self.body_as_multipart(),
+            BodyType::Multipart => self.body_as_multipart().await,
+            BodyType::Form if self.has_form_files() => self.body_as_multipart().await,
             BodyType::Form => self.body_as_form(),
             BodyType::Json if self.has_form_files() => self.body_from_file(),
             BodyType::Json => self.body_as_json(),
@@ -505,14 +504,16 @@ impl RequestItems {
     }
 }
 
-pub fn file_to_part(path: impl AsRef<Path>) -> io::Result<multipart::Part> {
+pub async fn file_to_part(path: impl AsRef<Path>) -> io::Result<multipart::Part> {
     let path = path.as_ref();
     let file_name = path
         .file_name()
         .map(|file_name| file_name.to_string_lossy().to_string());
-    let file = File::open(path)?;
-    let file_length = file.metadata()?.len();
-    let mut part = multipart::Part::reader_with_length(file, file_length);
+
+    // Use tokio::fs::File for streaming upload without loading entire file into memory
+    let file = tokio::fs::File::open(path).await?;
+    let file_length = file.metadata().await?.len();
+    let mut part = multipart::Part::stream_with_length(reqwest::Body::from(file), file_length);
     if let Some(file_name) = file_name {
         part = part.file_name(file_name);
     }

@@ -9,8 +9,8 @@ use crate::cli::{AuthType, Cli, HttpVersion, Verify};
 use crate::request_items::{Body, RequestItem, FORM_CONTENT_TYPE, JSON_ACCEPT, JSON_CONTENT_TYPE};
 use crate::utils::{url_with_query, HeaderValueExt};
 
-pub fn print_curl_translation(args: Cli) -> Result<()> {
-    let cmd = translate(args)?;
+pub async fn print_curl_translation(args: Cli) -> Result<()> {
+    let cmd = translate(args).await?;
     let mut stderr = stderr();
     for warning in &cmd.warnings {
         writeln!(stderr, "Warning: {warning}")?;
@@ -80,7 +80,7 @@ impl std::fmt::Display for Command {
     }
 }
 
-pub fn translate(args: Cli) -> Result<Command> {
+pub async fn translate(args: Cli) -> Result<Command> {
     let (headers, headers_to_unset) = args.request_items.headers()?;
 
     let mut cmd = Command::new(args.curl_long);
@@ -409,7 +409,7 @@ pub fn translate(args: Cli) -> Result<Command> {
             }
         }
     } else {
-        match args.request_items.body()? {
+        match args.request_items.body().await? {
             Body::Form(items) => {
                 if items.is_empty() {
                     // Force the header
@@ -467,8 +467,8 @@ pub fn translate(args: Cli) -> Result<Command> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn examples() {
+    #[tokio::test]
+    async fn examples() {
         let expected = vec![
             ("xh httpbin.org/get", "curl http://httpbin.org/get"),
             ("xh httpbin.org/get -4", "curl http://httpbin.org/get -4"),
@@ -569,7 +569,7 @@ mod tests {
         ];
         for (input, output) in expected {
             let cli = Cli::try_parse_from(input.split_whitespace()).unwrap();
-            let cmd = translate(cli).unwrap();
+            let cmd = translate(cli).await.unwrap();
             assert_eq!(cmd.to_string(), output, "Wrong output for {input:?}");
         }
     }

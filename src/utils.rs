@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 
 use anyhow::Result;
-use reqwest::blocking::{Request, Response};
 use reqwest::header::HeaderValue;
+use reqwest::{Request, Response};
 use url::Url;
 
 pub fn unescape(text: &str, special_chars: &'static str) -> String {
@@ -37,12 +37,12 @@ pub fn unescape(text: &str, special_chars: &'static str) -> String {
 }
 
 pub fn clone_request(request: &mut Request) -> Result<Request> {
-    if let Some(b) = request.body_mut().as_mut() {
-        b.buffer()?;
-    }
-    // This doesn't copy the contents of the buffer, cloning requests is cheap
-    // https://docs.rs/bytes/1.0.1/bytes/struct.Bytes.html
-    Ok(request.try_clone().unwrap()) // guaranteed to not fail if body is already buffered
+    // In async reqwest, Body doesn't have a buffer() method.
+    // However, for our use case, the body is typically already buffered
+    // (from ReadableBody or bytes). try_clone will work for non-streaming bodies.
+    request
+        .try_clone()
+        .ok_or_else(|| anyhow::anyhow!("Cannot clone request with streaming body"))
 }
 
 /// Whether to make some things more deterministic for the benefit of tests

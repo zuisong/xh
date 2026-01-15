@@ -1,10 +1,10 @@
 use std::io;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use regex_lite::Regex;
-use reqwest::blocking::{Request, Response};
 use reqwest::header::{HeaderValue, AUTHORIZATION, WWW_AUTHENTICATE};
-use reqwest::StatusCode;
+use reqwest::{Request, Response, StatusCode};
 
 use crate::cli::AuthType;
 use crate::middleware::{Context, Middleware};
@@ -71,9 +71,10 @@ impl<'a> DigestAuthMiddleware<'a> {
     }
 }
 
+#[async_trait]
 impl Middleware for DigestAuthMiddleware<'_> {
-    fn handle(&mut self, mut ctx: Context, mut request: Request) -> Result<Response> {
-        let mut response = self.next(&mut ctx, clone_request(&mut request)?)?;
+    async fn handle(&mut self, mut ctx: Context<'_, '_>, mut request: Request) -> Result<Response> {
+        let mut response = self.next(&mut ctx, clone_request(&mut request)?).await?;
         match response.headers().get(WWW_AUTHENTICATE) {
             Some(wwwauth) if response.status() == StatusCode::UNAUTHORIZED => {
                 let mut context = digest_auth::AuthContext::new(
@@ -90,7 +91,7 @@ impl Middleware for DigestAuthMiddleware<'_> {
                     .headers_mut()
                     .insert(AUTHORIZATION, HeaderValue::from_str(&answer)?);
                 self.print(&mut ctx, &mut response, &mut request)?;
-                Ok(self.next(&mut ctx, request)?)
+                Ok(self.next(&mut ctx, request).await?)
             }
             _ => Ok(response),
         }

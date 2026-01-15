@@ -1,20 +1,20 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::content_disposition;
-use crate::decoder::{decompress, get_compression_type};
-use crate::utils::{copy_largebuf, test_pretend_term, HeaderValueExt};
+use crate::utils::{test_pretend_term, HeaderValueExt};
 use anyhow::{anyhow, Context, Result};
+use futures::StreamExt;
 use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use mime2ext::mime2ext;
 use regex_lite::Regex;
 use reqwest::{
-    blocking::Response,
     header::{HeaderMap, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
-    StatusCode,
+    Response, StatusCode,
 };
+use tokio::io::AsyncWriteExt;
 
 fn get_content_length(headers: &HeaderMap) -> Option<u64> {
     headers
@@ -73,12 +73,12 @@ fn get_file_name(response: &Response, orig_url: &reqwest::Url) -> String {
 }
 
 pub fn get_file_size(path: Option<&Path>) -> Option<u64> {
-    Some(fs::metadata(path?).ok()?.len())
+    Some(std::fs::metadata(path?).ok()?.len())
 }
 
 /// Find a file name that doesn't exist yet.
-fn open_new_file(file_name: PathBuf) -> io::Result<(PathBuf, File)> {
-    fn try_open_new(file_name: &Path) -> io::Result<Option<File>> {
+fn open_new_file(file_name: PathBuf) -> io::Result<(PathBuf, std::fs::File)> {
+    fn try_open_new(file_name: &Path) -> io::Result<Option<std::fs::File>> {
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -163,8 +163,8 @@ const UNCOLORED_BAR_TEMPLATE: &str =
 const SPINNER_TEMPLATE: &str = "{spinner:.green} {bytes} {bytes_per_sec} {wide_msg}";
 const UNCOLORED_SPINNER_TEMPLATE: &str = "{spinner} {bytes} {bytes_per_sec} {wide_msg}";
 
-pub fn download_file(
-    mut response: Response,
+pub async fn download_file(
+    response: Response,
     file_name: Option<PathBuf>,
     // If we fall back on taking the filename from the URL it has to be the
     // original URL, before redirects. That's less surprising and matches
@@ -178,11 +178,11 @@ pub fn download_file(
         resume = None;
     }
 
-    let mut buffer: Box<dyn io::Write>;
     let dest_name: PathBuf;
+    let mut file: tokio::fs::File;
 
     if let Some(file_name) = file_name {
-        let mut open_opts = OpenOptions::new();
+        let mut open_opts = tokio::fs::OpenOptions::new();
         open_opts.write(true).create(true);
         if resume.is_some() {
             open_opts.append(true);
@@ -191,14 +191,23 @@ pub fn download_file(
         }
 
         dest_name = file_name;
-        buffer = Box::new(open_opts.open(&dest_name)?);
+        file = open_opts.open(&dest_name).await?;
     } else if test_pretend_term() || io::stdout().is_terminal() {
         let (new_name, handle) = open_new_file(get_file_name(&response, orig_url).into())?;
         dest_name = new_name;
-        buffer = Box::new(handle);
+        file = tokio::fs::File::from_std(handle);
     } else {
+        // Writing to stdout - use a temporary approach
         dest_name = "<stdout>".into();
-        buffer = Box::new(io::stdout());
+        // For stdout, we'll handle it differently
+        let mut stdout = tokio::io::stdout();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            stdout.write_all(&chunk).await?;
+        }
+        stdout.flush().await?;
+        return Ok(());
     }
 
     let starting_length: u64;
@@ -249,35 +258,34 @@ pub fn download_file(
         pb.reset_eta();
     }
 
-    match pb {
-        Some(ref pb) => {
-            let compression_type = get_compression_type(response.headers());
-            copy_largebuf(
-                &mut decompress(&mut pb.wrap_read(response), compression_type),
-                &mut buffer,
-                false,
-            )?;
-            let downloaded_length = pb.position() - starting_length;
-            pb.finish_and_clear();
-            let time_taken = starting_time.elapsed();
-            if !time_taken.is_zero() {
-                eprintln!(
-                    "Done. {} in {:.5}s ({}/s)",
-                    HumanBytes(downloaded_length),
-                    time_taken.as_secs_f64(),
-                    HumanBytes((downloaded_length as f64 / time_taken.as_secs_f64()) as u64)
-                );
-            } else {
-                eprintln!("Done. {}", HumanBytes(downloaded_length));
-            }
+    // Download using async stream
+    let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = starting_length;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+        if let Some(ref pb) = pb {
+            pb.set_position(downloaded);
         }
-        None => {
-            let compression_type = get_compression_type(response.headers());
-            copy_largebuf(
-                &mut decompress(&mut response, compression_type),
-                &mut buffer,
-                false,
-            )?;
+    }
+
+    file.flush().await?;
+
+    if let Some(pb) = pb {
+        let downloaded_length = downloaded - starting_length;
+        pb.finish_and_clear();
+        let time_taken = starting_time.elapsed();
+        if !time_taken.is_zero() {
+            eprintln!(
+                "Done. {} in {:.5}s ({}/s)",
+                HumanBytes(downloaded_length),
+                time_taken.as_secs_f64(),
+                HumanBytes((downloaded_length as f64 / time_taken.as_secs_f64()) as u64)
+            );
+        } else {
+            eprintln!("Done. {}", HumanBytes(downloaded_length));
         }
     }
 
