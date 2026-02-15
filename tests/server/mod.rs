@@ -163,6 +163,7 @@ where
     )
 }
 
+#[cfg(feature = "message-signatures")]
 pub fn http_v6<F, Fut>(func: F) -> Option<Server>
 where
     F: Fn(Request<hyper::body::Incoming>) -> Fut + Send + Sync + 'static,

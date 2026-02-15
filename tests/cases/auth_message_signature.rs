@@ -26,7 +26,8 @@ fn message_signature_verification_on_server() {
             // 1. Prepare the verification key (HMAC SHA256)
             use base64::Engine;
             let key_base64 = STANDARD.encode(key_material_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
 
             // 2. Verify the request using extension trait provided by httpsig-hyper
             use httpsig_hyper::MessageSignatureReq;
@@ -58,6 +59,55 @@ fn message_signature_verification_on_server() {
 }
 
 #[test]
+fn message_signature_redirect_follow_re_signs_request() {
+    let key = KEY_MATERIAL;
+    let key_id = "my-key";
+
+    let server = server::http(move |mut req| {
+        let key_inner = key.to_string();
+        let key_id_inner = key_id.to_string();
+        async move {
+            if req.uri().path() == "/redirect" {
+                return hyper::Response::builder()
+                    .status(302)
+                    .header("Location", "/final")
+                    .body(Default::default())
+                    .unwrap();
+            }
+
+            assert_eq!(req.uri().path(), "/final");
+            reconstruct_absolute_uri(&mut req);
+
+            use base64::Engine;
+            let key_base64 = STANDARD.encode(&key_inner);
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
+
+            use httpsig_hyper::MessageSignatureReq;
+            let result = req
+                .verify_message_signature(&shared_key, Some(&key_id_inner))
+                .await;
+            assert!(
+                result.is_ok(),
+                "Signature verification failed on redirected request: {:?}",
+                result.err()
+            );
+
+            hyper::Response::default()
+        }
+    });
+
+    get_command()
+        .arg("--unstable-m-sig-id=my-key")
+        .arg(format!("--unstable-m-sig-key={}", key))
+        .arg("--follow")
+        .arg("get")
+        .arg(server.url("/redirect"))
+        .assert()
+        .success();
+}
+
+#[test]
 fn message_signature_auth_defaults() {
     let key = KEY_MATERIAL;
     let key_id = "my-key";
@@ -82,7 +132,8 @@ fn message_signature_auth_defaults() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -128,7 +179,8 @@ fn message_signature_auth_ipv6_authority() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -193,7 +245,8 @@ fn message_signature_auth_with_custom_components_and_digest() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -247,7 +300,8 @@ fn message_signature_auth_with_multiple_set_cookie() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -292,7 +346,8 @@ fn message_signature_auth_sf_parameter() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -335,7 +390,8 @@ fn message_signature_auth_key_parameter() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -395,6 +451,20 @@ fn message_signature_auth_unsupported_parameters() {
 }
 
 #[test]
+fn message_signature_components_require_key_pair() {
+    get_command()
+        .arg("--offline")
+        .arg("--unstable-m-sig-comp=@method")
+        .arg("get")
+        .arg("https://example.com")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "Message signature components require both --unstable-m-sig-id and --unstable-m-sig-key.",
+        ));
+}
+
+#[test]
 fn message_signature_with_basic_auth() {
     let key = KEY_MATERIAL;
     let key_id = "my-key";
@@ -415,7 +485,8 @@ fn message_signature_with_basic_auth() {
             // Verify the signature
             use base64::Engine;
             let key_base64 = STANDARD.encode(&key_inner);
-            let shared_key = SharedKey::from_base64(&key_base64).unwrap();
+            let shared_key =
+                SharedKey::from_base64(&AlgorithmName::HmacSha256, &key_base64).unwrap();
             use httpsig_hyper::MessageSignatureReq;
             let result = req
                 .verify_message_signature(&shared_key, Some(&key_id_inner))
@@ -493,7 +564,7 @@ MC4CAQAwBQYDK2VwBCIEIJthSCf1pnwSYvdXIrXHikXUix0dmvLEm2JwWF+87xKG
             assert!(sig_input.contains(r#"keyid="ed25519-key""#));
 
             // Verify the signature using the public key
-            let secret_key = SecretKey::from_pem(&key_pem_inner).unwrap();
+            let secret_key = SecretKey::from_pem(&AlgorithmName::Ed25519, &key_pem_inner).unwrap();
             let public_key = secret_key.public_key();
 
             use httpsig_hyper::MessageSignatureReq;
@@ -513,6 +584,76 @@ MC4CAQAwBQYDK2VwBCIEIJthSCf1pnwSYvdXIrXHikXUix0dmvLEm2JwWF+87xKG
 
     get_command()
         .arg("--unstable-m-sig-id=ed25519-key")
+        .arg(format!("--unstable-m-sig-key={}", key_pem))
+        .arg("get")
+        .arg(server.base_url())
+        .assert()
+        .success();
+}
+
+#[test]
+fn message_signature_auth_rsa_pem() {
+    // Generated RSA private key in PKCS#8 PEM format.
+    let key_pem = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDHaZKiFICB5Fbu
+kJ5Quzmj11SGXeEuwrbmmS/hC/ou2aTkwzTFfKmuOPLsigHhfufVIrGEk9vdMySq
+6qqGqB/w/LDtLxZNhlcgjjF1RVvmFpUA5rTtXv0NmRpvLN1dekSG9cELShKRS2HL
+k6XpfFw1hyxf9WBe0diRc7AvwiVJ/nsTZPigeuSA3JYnw5/g1AHl0NgeJTtiWv4m
+05LyoBOvUQUhC7rX7tC7JvrogvnO88jk+se4QQACNkeF/QiFApIbo1D0dW8Ac1vY
+pjh8F5NvWpLuLK9pinQo1bZ2u7tc5BYk08CENKhYxFzeZ2BE517qaSRJoNLvpenH
+x1oXIg7fAgMBAAECggEAYGn4ZhogiezjZSQSD3l+ZGubp/2i/u9Q7Ex7fEVEuLst
+QRfqn2NnTN+nAFu3jhXENGY6Sx4MKzZrj6G3QjTugJ9EUeE22NPPs2NcoVUgGi6n
+61AggTYwho8UW1VnUCdqE5ClvfYZ5Rr71Sh1it7AXHcXKuwiJKY0Hhs/v8+QJOYk
+y36ze7ZIY9k1umKDnBKGwwcgChdXyyDWijYtF5oxtgQmjo88ehC6hD9Jtnlwjmd2
+RMIVWOVudJKeH4cT+uj0iKyJOPU8ajVN8AWulrHEKW+EsX2Zu9MArb5kcODH9nh3
+4o6lcGdcPbaqjRQ77zzA6RY9II6wO3yd1ED6B4rDnQKBgQD109GS5tZg3X8jJPkl
+sAUXrdibKfRK2pXgPvohHPf3r0i0cJ6ckcxFYHVUV5G36SzYKopSneCgkJsrqJiJ
+pD+NmCpvlIo0M1tEyKLvLtUdXPkEl+EGs6lt8si2Hkh4T2FzJQN5hSCzcVKJ4/Xc
+t+OkUjuLJfBrVivKmkITRhxOXQKBgQDPqg4SRKuoziKf1VDCyxIJr71t7pXPBr6x
+SgaGHGttqqD/mNdA9qFh30AJtRVQfWHZPILBf+ivec4+hvjo2B4cShoA8rOCQfUN
+vZixc3y+0Jlj1SXgBFNdSk8FzglUUu9b6BW5yeHlpmmJbYInHAOWGBkfuDGE8AKP
+V3oqXqGmawKBgGH8k531q2AjCgltNG6EUhNVNXDr8TdhF7qx/6vxSxoMYXOjLGYG
+a6D/yOTcnvXq2Pg1RLuXuLDn0yI86sh6kuaSz994GvqhufCZ9PBX/5TbuVrOW2D7
+fj6YNs75FTP3mEV4bIEkwpskQZ07I4ZeOjwGlzto3QM77uqsQEhEewX1AoGBAKJi
+WNSCLDU406xmUtuvjbBTYu5GpZCYtp7NwuI18O91gKW9r3yWHsX4nAu7NSqWkOAd
+SCXlTl+BAPy18IerD4iRjVn2btZJm0UeX/tK0l4nofqF3zMYTtPhWn+wiG0O2Srm
+Ba8dJW69vUMAhcjtSASjXWoHT3mjcG0EO3xMOV13AoGBAKd4uL7YW09vcDBSfp5D
+hykQ8Qtqo/k0GA2x0waAmMoYWUGugdO6oBwB1roGcpR9ctCtyYMiLpYtQK2THL9V
+jSEzKyBCU8RzCQSwyZ2rmr//jN7ztPasyGU2bbxEIQoNATxDRJXW1BrZ3OyTAbhF
+3BHaBNrexU/X3XnChxyuWQbs
+-----END PRIVATE KEY-----"#;
+    let key_id = "rsa-key";
+
+    let server = server::http(move |mut req| {
+        let key_pem_inner = key_pem.to_string();
+        let key_id_inner = key_id.to_string();
+        async move {
+            reconstruct_absolute_uri(&mut req);
+
+            let sig_input = req.headers()["Signature-Input"].to_str().unwrap();
+            assert!(sig_input.contains("alg=\"rsa-v1_5-sha256\""));
+            assert!(sig_input.contains(r#"keyid="rsa-key""#));
+
+            let secret_key =
+                SecretKey::from_pem(&AlgorithmName::RsaV1_5Sha256, &key_pem_inner).unwrap();
+            let public_key = secret_key.public_key();
+
+            use httpsig_hyper::MessageSignatureReq;
+            let result = req
+                .verify_message_signature(&public_key, Some(&key_id_inner))
+                .await;
+            assert!(
+                result.is_ok(),
+                "RSA signature verification failed: {:?}",
+                result.err()
+            );
+
+            hyper::Response::default()
+        }
+    });
+
+    get_command()
+        .arg("--unstable-m-sig-id=rsa-key")
         .arg(format!("--unstable-m-sig-key={}", key_pem))
         .arg("get")
         .arg(server.base_url())

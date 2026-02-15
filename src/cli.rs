@@ -820,6 +820,8 @@ pub struct MessageSignature {
     /// Message signature key material (RFC 9421).
     ///
     /// Can be a raw string or a file path starting with @.
+    /// Supported algorithms: hmac-sha256, ed25519, ecdsa-p256-sha256,
+    /// ecdsa-p384-sha384, rsa-v1_5-sha256, rsa-pss-sha512.
     #[arg(long = "unstable-m-sig-key", value_name = "KEY", requires = "m_sig_id")]
     pub m_sig_key: Option<String>,
 
@@ -835,12 +837,36 @@ pub struct MessageSignature {
     pub m_sig_comp: Vec<MessageSignatureComponents>,
 }
 
+#[allow(unused)]
+impl MessageSignature {
+    pub fn has_key_pair(&self) -> bool {
+        self.m_sig_id.is_some() && self.m_sig_key.is_some()
+    }
+
+    pub fn key_pair(&self) -> Option<(&str, &str)> {
+        Some((self.m_sig_id.as_deref()?, self.m_sig_key.as_deref()?))
+    }
+
+    pub fn has_components(&self) -> bool {
+        self.m_sig_comp
+            .iter()
+            .any(|components| !components.0.is_empty())
+    }
+
+    pub fn flattened_components(&self) -> Vec<String> {
+        self.m_sig_comp
+            .iter()
+            .flat_map(|components| components.0.iter().cloned())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageSignatureComponents(pub Vec<String>);
 
 impl FromStr for MessageSignatureComponents {
     type Err = std::convert::Infallible;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let components = s
             .split(',')
             .map(|s| {

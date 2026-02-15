@@ -1,21 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use httpsig::prelude::{
-    message_component::{
-        DerivedComponentName, HttpMessageComponent, HttpMessageComponentId,
-        HttpMessageComponentName, HttpMessageComponentParam,
-    },
-    AlgorithmName, HttpSigResult, HttpSignatureBase, HttpSignatureParams, SecretKey, SharedKey,
-    SigningKey,
+use httpsig_hyper::prelude::{
+    message_component::{HttpMessageComponentId, HttpMessageComponentName},
+    AlgorithmName, HttpSigResult, HttpSignatureParams, SecretKey, SharedKey, SigningKey,
 };
+use hyper::http;
 use reqwest::blocking::{Body as ReqwestBody, Request};
 use reqwest::header::{HeaderName, HeaderValue};
 use sha2::{Digest, Sha256};
-use url::Url;
-
-use crate::utils::HeaderValueExt;
 
 pub fn sign_request(
     request: &mut Request,
@@ -44,28 +38,36 @@ pub fn sign_request(
     // Ensure keyid is included in Signature-Input
     signature_params.set_keyid(key_id);
 
-    let query_params = QueryParams::from_url(request.url());
+    // Preferred path: use upstream sync signing helper.
+    let mut http_request = http::Request::builder()
+        .version(request.version())
+        .method(request.method())
+        .uri(request.url().as_str())
+        .body(reqwest::Body::default())
+        .context("message-signature: Failed to build temporary HTTP request")?;
+    *http_request.headers_mut() = request.headers().clone();
 
-    let component_lines = build_component_lines(request, &signature_params, &query_params)?;
-    let signature_base = HttpSignatureBase::try_new(&component_lines, &signature_params)
-        .context("message-signature: Failed to build signature base")?;
+    use httpsig_hyper::MessageSignatureReqSync;
+    http_request
+        .set_message_signature_sync(&signature_params, &signing_key, Some("sig1"))
+        .context("message-signature: Failed to set message signature")?;
 
-    // We use "sig1" as the label for now
-    let label = "sig1";
+    let signature = http_request
+        .headers()
+        .get("signature")
+        .context("message-signature: Signature header missing after signing")?;
+    let signature_input = http_request
+        .headers()
+        .get("signature-input")
+        .context("message-signature: Signature-Input header missing after signing")?;
 
-    let headers = signature_base
-        .build_signature_headers(&signing_key, Some(label))
-        .context("message-signature: Failed to build signature headers")?;
-
-    request.headers_mut().insert(
-        HeaderName::from_static("signature"),
-        HeaderValue::from_str(&headers.signature_header_value())?,
-    );
+    request
+        .headers_mut()
+        .insert(HeaderName::from_static("signature"), signature.clone());
     request.headers_mut().insert(
         HeaderName::from_static("signature-input"),
-        HeaderValue::from_str(&headers.signature_input_header_value())?,
+        signature_input.clone(),
     );
-
     Ok(())
 }
 
@@ -236,253 +238,40 @@ fn build_signing_key(
     key_material: &[u8],
     key_id: &str,
 ) -> Result<(MessageSigningKey, AlgorithmName)> {
-    let algorithm = if let Ok(pem) = std::str::from_utf8(key_material) {
+    if let Ok(pem) = std::str::from_utf8(key_material) {
         if pem.contains("-----BEGIN") {
-            if let Ok(secret) = SecretKey::from_pem(pem) {
+            if let Some(secret) = parse_pem_secret_key(pem) {
                 let alg = secret.alg();
                 return Ok((MessageSigningKey::Secret(secret, key_id.to_string()), alg));
             }
-        }
-        AlgorithmName::HmacSha256
-    } else {
-        AlgorithmName::HmacSha256
-    };
-
-    match algorithm {
-        AlgorithmName::HmacSha256 => {
-            let encoded = STANDARD.encode(key_material);
-            let shared_key = SharedKey::from_base64(&encoded)
-                .map_err(|e| anyhow!("message-signature: Failed to create HMAC key: {:?}", e))?;
-            Ok((
-                MessageSigningKey::Shared(shared_key, key_id.to_string()),
-                AlgorithmName::HmacSha256,
-            ))
-        }
-        alg => {
-            let secret = SecretKey::from_bytes(alg, key_material)
-                .context("message-signature: Failed to parse private key bytes")?;
-            let alg = secret.alg();
-            Ok((MessageSigningKey::Secret(secret, key_id.to_string()), alg))
-        }
-    }
-}
-
-fn build_component_lines(
-    request: &Request,
-    params: &HttpSignatureParams,
-    query_params: &QueryParams,
-) -> Result<Vec<HttpMessageComponent>> {
-    let mut components = Vec::new();
-    for component_id in &params.covered_components {
-        let values = gather_component_values(request, component_id, query_params)?;
-
-        // TODO: RFC 9421 Section 2.1.1 states that 'set-cookie' MUST NOT be combined
-        // into a single field value and should be treated as separate values (multiple lines).
-        // Currently, they are combined with a comma because httpsig's HttpSignatureBase
-        // requires the number of component lines to match the number of covered component IDs.
-        // Supporting this correctly would require duplicating the component ID in
-        // Signature-Input or using a library version that handles multi-value sets automatically.
-        components.push(
-            HttpMessageComponent::try_from((component_id, values.as_slice()))
-                .context("message-signature: Failed to build HTTP message component")?,
-        );
-    }
-    Ok(components)
-}
-
-fn gather_component_values(
-    request: &Request,
-    component_id: &HttpMessageComponentId,
-    query_params: &QueryParams,
-) -> Result<Vec<String>> {
-    match &component_id.name {
-        HttpMessageComponentName::Derived(derived) => {
-            gather_derived_component_values(request, derived, component_id, query_params)
-        }
-        HttpMessageComponentName::HttpField(field) => gather_http_field_values(request, field),
-    }
-}
-
-fn gather_http_field_values(request: &Request, field: &str) -> Result<Vec<String>> {
-    let name = field.to_ascii_lowercase();
-    let header_name = HeaderName::from_bytes(name.as_bytes()).with_context(|| {
-        format!("message-signature: Invalid header name in Signature-Input: {field}")
-    })?;
-    let values = request.headers().get_all(&header_name);
-    if values.iter().next().is_none() {
-        bail!("message-signature: Signature-Input refers to header '{field}', but the request does not include it");
-    }
-    let mut collected = Vec::new();
-    for value in values.iter() {
-        // According to RFC 9421 Section 2.1, the value of an HTTP field component
-        // is the field value with leading and trailing whitespace removed.
-        let s = header_value_to_string(value)?;
-        collected.push(s.trim().to_string());
-    }
-    Ok(collected)
-}
-
-fn gather_derived_component_values(
-    request: &Request,
-    derived: &DerivedComponentName,
-    component_id: &HttpMessageComponentId,
-    query_params: &QueryParams,
-) -> Result<Vec<String>> {
-    let url = request.url();
-    match derived {
-        DerivedComponentName::Method => Ok(vec![request.method().as_str().to_string()]),
-        DerivedComponentName::TargetUri => Ok(vec![url.as_str().to_string()]),
-        DerivedComponentName::Authority => Ok(vec![compute_authority(url)]),
-        DerivedComponentName::Scheme => Ok(vec![url.scheme().to_ascii_lowercase()]),
-        DerivedComponentName::RequestTarget => Ok(vec![compute_request_target(request)]),
-        DerivedComponentName::Path => Ok(vec![compute_path(url)]),
-        DerivedComponentName::Query => Ok(vec![compute_query(url)]),
-        DerivedComponentName::QueryParam => gather_query_param_values(query_params, component_id),
-        DerivedComponentName::SignatureParams => {
             bail!(
-                "message-signature: @signature-params must not be included as a covered component"
+                "message-signature: Failed to parse PEM private key. Supported algorithms: ed25519, ecdsa-p256-sha256, ecdsa-p384-sha384, rsa-v1_5-sha256, rsa-pss-sha512"
             );
         }
-        DerivedComponentName::Status => {
-            bail!("message-signature: @status derived component is only valid in responses");
+    }
+
+    let encoded = STANDARD.encode(key_material);
+    let shared_key = SharedKey::from_base64(&AlgorithmName::HmacSha256, &encoded)
+        .map_err(|e| anyhow!("message-signature: Failed to create HMAC key: {:?}", e))?;
+    Ok((
+        MessageSigningKey::Shared(shared_key, key_id.to_string()),
+        AlgorithmName::HmacSha256,
+    ))
+}
+
+fn parse_pem_secret_key(pem: &str) -> Option<SecretKey> {
+    for alg in [
+        AlgorithmName::Ed25519,
+        AlgorithmName::EcdsaP256Sha256,
+        AlgorithmName::EcdsaP384Sha384,
+        AlgorithmName::RsaV1_5Sha256,
+        AlgorithmName::RsaPssSha512,
+    ] {
+        if let Ok(secret) = SecretKey::from_pem(&alg, pem) {
+            return Some(secret);
         }
     }
-}
-
-fn compute_authority(url: &Url) -> String {
-    // According to RFC 9421 Section 2.2.3, the "@authority" derived component
-    // consists of the host and, if present and non-default, the port number.
-    // IPv6 literals must be wrapped in brackets to match URI authority syntax (RFC 3986),
-    // which RFC 9421 relies on for @authority formatting.
-    let host = match url.host() {
-        Some(url::Host::Domain(domain)) => domain.to_ascii_lowercase(),
-        Some(url::Host::Ipv4(addr)) => addr.to_string(),
-        Some(url::Host::Ipv6(addr)) => format!("[{addr}]"),
-        None => String::new(),
-    };
-    if let Some(port) = url.port() {
-        if Some(port) != default_port_for_scheme(url.scheme()) {
-            return format!("{host}:{port}");
-        }
-    }
-    host
-}
-
-fn default_port_for_scheme(scheme: &str) -> Option<u16> {
-    match scheme {
-        "http" => Some(80),
-        "https" => Some(443),
-        _ => None,
-    }
-}
-
-fn compute_request_target(request: &Request) -> String {
-    if request.method() == reqwest::Method::CONNECT {
-        let url = request.url();
-        return compute_authority(url);
-    }
-    let url = request.url();
-    let mut target = url.path().to_string();
-    if let Some(query) = url.query() {
-        target.push('?');
-        target.push_str(query);
-    }
-    target
-}
-
-/// Computes the @path derived component value according to RFC 9421 Section 2.2.6.
-///
-/// The @path component is the absolute path of the request target with no query component
-/// and no trailing question mark. According to RFC 9421:
-/// - An empty path string is normalized as a single slash ("/") character
-/// - Path components are represented before decoding any percent-encoded octets
-///
-/// For example:
-/// - URL "https://example.com/path?query" -> "/path"
-/// - URL "https://example.com" -> "/"
-/// - URL "https://example.com/" -> "/"
-fn compute_path(url: &Url) -> String {
-    let path = url.path();
-    if path.is_empty() {
-        // RFC 9421 Section 2.2.6: empty path is normalized as "/"
-        "/".to_string()
-    } else {
-        path.to_string()
-    }
-}
-
-/// Computes the @query derived component value according to RFC 9421 Section 2.2.7.
-///
-/// The @query component is the entire normalized query string including the leading "?"
-/// character. According to RFC 9421 Section 2.2.7:
-/// - When a query is present: the value is "?" + query string
-/// - When the query is absent: the value is the leading "?" character alone
-///
-/// This behavior is CORRECT per RFC 9421. Do NOT return an empty string when query is absent,
-/// as that would violate the specification and cause signature verification failures with
-/// RFC-compliant verifiers.
-///
-/// For example:
-/// - URL "https://example.com/path?param=value" -> "?param=value"
-/// - URL "https://example.com/path" -> "?"
-fn compute_query(url: &Url) -> String {
-    match url.query() {
-        Some(q) => format!("?{q}"),
-        // RFC 9421 Section 2.2.7: "If the query string is absent from the request message,
-        // the component value is the leading ? character alone"
-        None => "?".to_string(),
-    }
-}
-
-fn gather_query_param_values(
-    query_params: &QueryParams,
-    component_id: &HttpMessageComponentId,
-) -> Result<Vec<String>> {
-    let name = component_id
-        .params
-        .0
-        .iter()
-        .find_map(|param| match param {
-            HttpMessageComponentParam::Name(name) => Some(name.as_str()),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("message-signature: @query-param requires a name parameter"))?;
-
-    let values = query_params
-        .params
-        .get(name)
-        .ok_or_else(|| anyhow!("message-signature: Query parameter '{name}' is not present"))?;
-
-    Ok(values.clone())
-}
-
-struct QueryParams {
-    params: HashMap<String, Vec<String>>,
-}
-
-impl QueryParams {
-    fn from_url(url: &Url) -> Self {
-        let mut params: HashMap<String, Vec<String>> = HashMap::new();
-        if let Some(query) = url.query() {
-            // According to RFC 9421 Section 2.2.8.1, the value of the "@query-param"
-            // component is the percent-decoded value of the parameter.
-            // form_urlencoded::parse handles the percent-decoding and preserves order.
-            for (name, value) in form_urlencoded::parse(query.as_bytes()) {
-                params
-                    .entry(name.into_owned())
-                    .or_default()
-                    .push(value.into_owned());
-            }
-        }
-        QueryParams { params }
-    }
-}
-
-fn header_value_to_string(value: &HeaderValue) -> Result<String> {
-    match value.to_ascii_or_latin1() {
-        Ok(s) => Ok(s.to_string()),
-        Err(bad) => Ok(bad.latin1()),
-    }
+    None
 }
 
 enum MessageSigningKey {
@@ -539,51 +328,6 @@ mod tests {
             digest_str,
             "sha-256=:3/1gIbsr1bCvZ2KQgJ7DpTGR3YHH9wpLKGiKNiGCmG8=:"
         );
-    }
-
-    #[test]
-    fn test_component_gathering_derived() {
-        let req = Client::new()
-            .post("https://example.com/foo?bar=baz")
-            .header("Date", "Tue, 20 Apr 2021 02:07:55 GMT")
-            .build()
-            .unwrap();
-
-        let query_params = QueryParams::from_url(req.url());
-
-        // @method
-        let id_method = HttpMessageComponentId::try_from("@method").unwrap();
-        let values = gather_component_values(&req, &id_method, &query_params).unwrap();
-        assert_eq!(values, vec!["POST"]);
-
-        // @target-uri
-        let id_uri = HttpMessageComponentId::try_from("@target-uri").unwrap();
-        let values = gather_component_values(&req, &id_uri, &query_params).unwrap();
-        assert_eq!(values, vec!["https://example.com/foo?bar=baz"]);
-
-        // @authority
-        let id_auth = HttpMessageComponentId::try_from("@authority").unwrap();
-        let values = gather_component_values(&req, &id_auth, &query_params).unwrap();
-        assert_eq!(values, vec!["example.com"]); // default port 443 omitted
-
-        // @path
-        let id_path = HttpMessageComponentId::try_from("@path").unwrap();
-        let values = gather_component_values(&req, &id_path, &query_params).unwrap();
-        assert_eq!(values, vec!["/foo"]);
-
-        // @query
-        let id_query = HttpMessageComponentId::try_from("@query").unwrap();
-        let values = gather_component_values(&req, &id_query, &query_params).unwrap();
-        assert_eq!(values, vec!["?bar=baz"]);
-    }
-
-    #[test]
-    fn test_authority_ipv6_brackets() {
-        let url = Url::parse("http://[::1]:8080/").unwrap();
-        assert_eq!(compute_authority(&url), "[::1]:8080");
-
-        let default_port_url = Url::parse("http://[::1]/").unwrap();
-        assert_eq!(compute_authority(&default_port_url), "[::1]");
     }
 
     #[test]
@@ -790,28 +534,14 @@ mod tests {
     }
 
     #[test]
-    fn test_set_cookie_gathering() {
-        let req = Client::new()
-            .get("https://example.com")
-            .header("set-cookie", "a=1")
-            .header("set-cookie", "b=2")
-            .build()
-            .unwrap();
+    fn test_invalid_pem_key_does_not_fall_back_to_hmac() {
+        let mut req = Client::new().get("https://example.com").build().unwrap();
+        let invalid_pem = "-----BEGIN PRIVATE KEY-----\nnot-a-valid-key\n-----END PRIVATE KEY-----";
+        let result = sign_request(&mut req, "key1", invalid_pem, None);
 
-        let values = gather_http_field_values(&req, "set-cookie").unwrap();
-        // We expect individual values, not a joined string
-        assert_eq!(values, vec!["a=1", "b=2"]);
-    }
-
-    #[test]
-    fn test_header_trimming() {
-        let req = Client::new()
-            .get("https://example.com")
-            .header("x-test", "  value  ")
-            .build()
-            .unwrap();
-
-        let values = gather_http_field_values(&req, "x-test").unwrap();
-        assert_eq!(values, vec!["value"]);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(err_msg.contains("Failed to parse PEM private key"));
+        assert!(!req.headers().contains_key("signature"));
     }
 }
