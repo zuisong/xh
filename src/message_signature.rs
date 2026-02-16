@@ -16,18 +16,11 @@ pub fn sign_request(
     key_id: &str,
     key_material: &str,
     components: Option<&[String]>,
+    algorithm_override: Option<AlgorithmName>,
 ) -> Result<()> {
-    let key = if let Some(path) = key_material.strip_prefix('@') {
-        std::fs::read(crate::utils::expand_tilde(path))?
-    } else {
-        // Unlike some HTTPie plugins that force Base64 encoding for the secret key part
-        // of the --auth string, xh treats the raw string as the key material by default.
-        // This provides a more direct CLI experience, consistent with how xh handles
-        // standard passwords in `-a user:password`.
-        key_material.as_bytes().to_vec()
-    };
+    let key = parse_key_input(key_material)?;
 
-    let (signing_key, algorithm) = build_signing_key(&key, key_id)?;
+    let (signing_key, algorithm) = build_signing_key(&key, key_id, algorithm_override)?;
 
     let components = resolve_components(request, components);
     ensure_content_digest(request, &components)?;
@@ -234,15 +227,50 @@ fn buffer_request_body(request: &mut Request) -> Result<Vec<u8>> {
     }
 }
 
+fn parse_key_input(key_material: &str) -> Result<Vec<u8>> {
+    let key = if let Some(path) = key_material.strip_prefix('@') {
+        std::fs::read(crate::utils::expand_tilde(path))?
+    } else {
+        // Unlike some HTTPie plugins that force Base64 encoding for the secret key part
+        // of the --auth string, xh treats the raw string as the key material by default.
+        // This provides a more direct CLI experience, consistent with how xh handles
+        // standard passwords in `-a user:password`.
+        key_material.as_bytes().to_vec()
+    };
+    Ok(key)
+}
+
 fn build_signing_key(
     key_material: &[u8],
     key_id: &str,
+    algorithm_override: Option<AlgorithmName>,
 ) -> Result<(MessageSigningKey, AlgorithmName)> {
+    if let Some(algorithm) = algorithm_override {
+        return build_signing_key_with_algorithm(key_material, key_id, &algorithm);
+    }
+
     if let Ok(pem) = std::str::from_utf8(key_material) {
         if pem.contains("-----BEGIN") {
-            if let Some(secret) = parse_pem_secret_key(pem) {
+            if let Some(secret) = parse_pem_secret_key(
+                pem,
+                &[
+                    AlgorithmName::Ed25519,
+                    AlgorithmName::EcdsaP256Sha256,
+                    AlgorithmName::EcdsaP384Sha384,
+                ],
+            ) {
                 let alg = secret.alg();
                 return Ok((MessageSigningKey::Secret(secret, key_id.to_string()), alg));
+            }
+            if parse_pem_secret_key(
+                pem,
+                &[AlgorithmName::RsaV1_5Sha256, AlgorithmName::RsaPssSha512],
+            )
+            .is_some()
+            {
+                bail!(
+                    "message-signature: RSA private keys require an explicit algorithm. Use --unstable-m-sig-alg=rsa-v1_5-sha256 or --unstable-m-sig-alg=rsa-pss-sha512"
+                );
             }
             bail!(
                 "message-signature: Failed to parse PEM private key. Supported algorithms: ed25519, ecdsa-p256-sha256, ecdsa-p384-sha384, rsa-v1_5-sha256, rsa-pss-sha512"
@@ -250,6 +278,13 @@ fn build_signing_key(
         }
     }
 
+    build_hmac_signing_key(key_material, key_id)
+}
+
+fn build_hmac_signing_key(
+    key_material: &[u8],
+    key_id: &str,
+) -> Result<(MessageSigningKey, AlgorithmName)> {
     let encoded = STANDARD.encode(key_material);
     let shared_key = SharedKey::from_base64(&AlgorithmName::HmacSha256, &encoded)
         .map_err(|e| anyhow!("message-signature: Failed to create HMAC key: {:?}", e))?;
@@ -259,15 +294,46 @@ fn build_signing_key(
     ))
 }
 
-fn parse_pem_secret_key(pem: &str) -> Option<SecretKey> {
-    for alg in [
-        AlgorithmName::Ed25519,
-        AlgorithmName::EcdsaP256Sha256,
-        AlgorithmName::EcdsaP384Sha384,
-        AlgorithmName::RsaV1_5Sha256,
-        AlgorithmName::RsaPssSha512,
-    ] {
-        if let Ok(secret) = SecretKey::from_pem(&alg, pem) {
+fn build_signing_key_with_algorithm(
+    key_material: &[u8],
+    key_id: &str,
+    algorithm: &AlgorithmName,
+) -> Result<(MessageSigningKey, AlgorithmName)> {
+    if algorithm == &AlgorithmName::HmacSha256 {
+        return build_hmac_signing_key(key_material, key_id);
+    }
+
+    let secret = if let Ok(pem) = std::str::from_utf8(key_material) {
+        if pem.contains("-----BEGIN") {
+            SecretKey::from_pem(algorithm, pem).with_context(|| {
+                format!(
+                    "message-signature: Failed to parse PEM private key as {}",
+                    algorithm.as_str()
+                )
+            })?
+        } else {
+            SecretKey::from_bytes(algorithm, key_material).with_context(|| {
+                format!(
+                    "message-signature: Failed to parse private key bytes as {}",
+                    algorithm.as_str()
+                )
+            })?
+        }
+    } else {
+        SecretKey::from_bytes(algorithm, key_material).with_context(|| {
+            format!(
+                "message-signature: Failed to parse private key bytes as {}",
+                algorithm.as_str()
+            )
+        })?
+    };
+    let alg = secret.alg();
+    Ok((MessageSigningKey::Secret(secret, key_id.to_string()), alg))
+}
+
+fn parse_pem_secret_key(pem: &str, algorithms: &[AlgorithmName]) -> Option<SecretKey> {
+    for alg in algorithms {
+        if let Ok(secret) = SecretKey::from_pem(alg, pem) {
             return Some(secret);
         }
     }
@@ -344,7 +410,7 @@ mod tests {
         // This will internally call resolve_components -> try_from("@query-param;name=\"param\"")
         // If this succeeds, then the logic is correct.
         let components = vec!["@method".to_string(), "@query-params".to_string()];
-        sign_request(&mut req, key_id, key_material, Some(&components)).unwrap();
+        sign_request(&mut req, key_id, key_material, Some(&components), None).unwrap();
 
         let sig_input = req.headers()["signature-input"].to_str().unwrap();
         assert!(sig_input.contains("sig1="));
@@ -369,7 +435,7 @@ mod tests {
             "@authority".to_string(),
             "content-digest".to_string(),
         ];
-        sign_request(&mut req, key_id, key_material, Some(&components)).unwrap();
+        sign_request(&mut req, key_id, key_material, Some(&components), None).unwrap();
 
         assert!(req.headers().contains_key("signature"));
         assert!(req.headers().contains_key("signature-input"));
@@ -395,7 +461,7 @@ mod tests {
 
         // Attempt to sign with the ;bs parameter which is currently unsupported by the underlying library
         let components = vec!["\"x-data\";bs".to_string()];
-        let result = sign_request(&mut req, key_id, key_material, Some(&components));
+        let result = sign_request(&mut req, key_id, key_material, Some(&components), None);
 
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.err().unwrap());
@@ -413,7 +479,7 @@ mod tests {
 
         // ;sf is implemented in the underlying library
         let components = vec!["\"x-struct\";sf".to_string()];
-        let result = sign_request(&mut req, "key1", "secret", Some(&components));
+        let result = sign_request(&mut req, "key1", "secret", Some(&components), None);
         assert!(result.is_ok(), "sf parameter should be supported");
     }
 
@@ -427,7 +493,7 @@ mod tests {
 
         // ;key is implemented in the underlying library
         let components = vec!["\"x-dict\";key=\"a\"".to_string()];
-        let result = sign_request(&mut req, "key1", "secret", Some(&components));
+        let result = sign_request(&mut req, "key1", "secret", Some(&components), None);
         assert!(result.is_ok(), "key parameter should be supported");
     }
 
@@ -441,7 +507,7 @@ mod tests {
 
         // ;tr is explicitly NOT implemented in the underlying library
         let components = vec!["\"x-field\";tr".to_string()];
-        let result = sign_request(&mut req, "key1", "secret", Some(&components));
+        let result = sign_request(&mut req, "key1", "secret", Some(&components), None);
 
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.err().unwrap());
@@ -458,7 +524,7 @@ mod tests {
 
         // ;name is only for @query-param, using it on a regular field should error
         let components = vec!["\"x-field\";name=\"id\"".to_string()];
-        let result = sign_request(&mut req, "key1", "secret", Some(&components));
+        let result = sign_request(&mut req, "key1", "secret", Some(&components), None);
 
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.err().unwrap());
@@ -537,11 +603,35 @@ mod tests {
     fn test_invalid_pem_key_does_not_fall_back_to_hmac() {
         let mut req = Client::new().get("https://example.com").build().unwrap();
         let invalid_pem = "-----BEGIN PRIVATE KEY-----\nnot-a-valid-key\n-----END PRIVATE KEY-----";
-        let result = sign_request(&mut req, "key1", invalid_pem, None);
+        let result = sign_request(&mut req, "key1", invalid_pem, None, None);
 
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.err().unwrap());
         assert!(err_msg.contains("Failed to parse PEM private key"));
         assert!(!req.headers().contains_key("signature"));
+    }
+
+    #[test]
+    fn test_rsa_pem_requires_explicit_algorithm() {
+        let rsa_key_path = format!(
+            "{}/tests/fixtures/keys/rsa_private_key_pkcs8.pem",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let pem = std::fs::read(rsa_key_path).unwrap();
+        let result = build_signing_key(&pem, "key1", None);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(err_msg.contains("RSA private keys require an explicit algorithm"));
+    }
+
+    #[test]
+    fn test_rsa_pem_with_explicit_algorithm_succeeds() {
+        let rsa_key_path = format!(
+            "{}/tests/fixtures/keys/rsa_private_key_pkcs8.pem",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let pem = std::fs::read(rsa_key_path).unwrap();
+        let result = build_signing_key(&pem, "key1", Some(AlgorithmName::RsaV1_5Sha256));
+        assert!(result.is_ok());
     }
 }

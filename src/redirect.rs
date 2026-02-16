@@ -52,11 +52,13 @@ impl Middleware for RedirectFollower {
             if let Some(signature) = &self.message_signature {
                 if let Some((key_id, key_material)) = signature.key_pair() {
                     let components = signature.flattened_components();
+                    let algorithm = signature.algorithm().map(Into::into);
                     crate::message_signature::sign_request(
                         &mut next_request,
                         key_id,
                         key_material,
                         (!components.is_empty()).then_some(components.as_slice()),
+                        algorithm,
                     )?;
                 }
             }

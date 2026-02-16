@@ -101,6 +101,8 @@ pub fn translate(args: Cli) -> Result<Command> {
         // No equivalent
         (args.m_sig.m_sig_key.is_some(), "--unstable-m-sig-key"),
         // No equivalent
+        (args.m_sig.m_sig_alg.is_some(), "--unstable-m-sig-alg"),
+        // No equivalent
         (args.m_sig.has_components(), "--unstable-m-sig-comp"),
         // No equivalent
         (args.compress > 0, "-x/--compress"),

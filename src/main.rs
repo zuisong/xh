@@ -584,6 +584,7 @@ fn run(args: Cli) -> Result<ExitCode> {
         #[cfg(not(feature = "message-signatures"))]
         if args.m_sig.m_sig_id.is_some()
             || args.m_sig.m_sig_key.is_some()
+            || args.m_sig.m_sig_alg.is_some()
             || args.m_sig.has_components()
         {
             return Err(anyhow!(
@@ -601,11 +602,13 @@ fn run(args: Cli) -> Result<ExitCode> {
         #[cfg(feature = "message-signatures")]
         if let Some((key_id, key_material)) = args.m_sig.key_pair() {
             let m_sig_components = args.m_sig.flattened_components();
+            let m_sig_algorithm = args.m_sig.algorithm().map(Into::into);
             message_signature::sign_request(
                 &mut request,
                 key_id,
                 key_material,
                 (!m_sig_components.is_empty()).then_some(m_sig_components.as_slice()),
+                m_sig_algorithm,
             )?;
         }
 
