@@ -1,8 +1,10 @@
 use std::{
-    io::{self, Write},
+    io::{self, BufReader, Read, Write},
     sync::{LazyLock, OnceLock},
 };
 
+use quick_xml::events::Event;
+use quick_xml::{Reader, Writer};
 use syntect::dumps::from_binary;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -21,6 +23,59 @@ pub fn get_json_formatter(indent_level: usize) -> jsonxf::Formatter {
     fmt.record_separator = String::from("\n\n");
     fmt.eager_record_separators = true;
     fmt
+}
+
+/// Pretty-print an XML document. Whitespace-only text nodes (typically existing
+/// indentation) are stripped so that already-formatted XML gets re-indented cleanly.
+pub fn format_xml(indent: usize, text: &str, mut out: impl Write) -> io::Result<()> {
+    let mut reader = Reader::from_str(text);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new_with_indent(Vec::new(), b' ', indent);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(Event::Text(ref e)) if e.iter().all(|b| b.is_ascii_whitespace()) => {}
+            Ok(event) => writer.write_event(event).map_err(io::Error::other)?,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+    }
+    out.write_all(writer.into_inner().as_slice())?;
+    out.write_all(b"\n\n")?;
+    Ok(())
+}
+
+/// Like [`format_xml`], but reads from a stream and flushes after each XML event.
+pub fn format_xml_stream(
+    indent: usize,
+    input: impl Read,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    let mut reader = Reader::from_reader(BufReader::new(input));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new_with_indent(Vec::new(), b' ', indent);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(Event::Text(ref e)) if e.iter().all(|b| b.is_ascii_whitespace()) => {}
+            Ok(event) => writer.write_event(event).map_err(io::Error::other)?,
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        }
+        let inner = writer.get_mut();
+        if !inner.is_empty() {
+            output.write_all(inner)?;
+            output.flush()?;
+            inner.clear();
+        }
+        buf.clear();
+    }
+    let inner = writer.into_inner();
+    if !inner.is_empty() {
+        output.write_all(&inner)?;
+    }
+    output.write_all(b"\n\n")?;
+    output.flush()?;
+    Ok(())
 }
 
 /// Format a JSON value using serde. Unlike jsonxf this decodes escaped Unicode values.

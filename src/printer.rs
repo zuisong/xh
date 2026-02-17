@@ -18,7 +18,7 @@ use crate::{
     cli::{Pretty, Theme},
     decoder::{decompress, get_compression_type},
     formatting::serde_json_format,
-    formatting::{get_json_formatter, Highlighter},
+    formatting::{format_xml, format_xml_stream, get_json_formatter, Highlighter},
     middleware::ResponseExt,
     utils::{copy_largebuf, test_mode, BUFFER_SIZE},
 };
@@ -116,9 +116,36 @@ impl<'a, T: Read> BinaryGuard<'a, T> {
     }
 }
 
+/// Wraps a [`Highlighter`] as a [`Write`] target: accumulates bytes and
+/// syntax-highlights them on each [`flush`](Write::flush) call.
+struct HighlightingWriter<'a> {
+    buf: Vec<u8>,
+    highlighter: Highlighter<'a>,
+}
+
+impl Write for HighlightingWriter<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.buf.is_empty() {
+            for line in self.buf.split_inclusive(|&b| b == b'\n') {
+                self.highlighter.highlight_bytes(line)?;
+            }
+            self.highlighter.flush()?;
+            self.buf.clear();
+        }
+        Ok(())
+    }
+}
+
 pub struct Printer {
     format_json: bool,
     json_indent_level: usize,
+    format_xml: bool,
+    xml_indent_level: usize,
     sort_headers: bool,
     color: bool,
     theme: Theme,
@@ -137,6 +164,8 @@ impl Printer {
         Printer {
             format_json: format_options.json_format.unwrap_or(pretty.format()),
             json_indent_level: format_options.json_indent.unwrap_or(4),
+            format_xml: format_options.xml_format.unwrap_or(pretty.format()),
+            xml_indent_level: format_options.xml_indent.unwrap_or(4),
             sort_headers: format_options.headers_sort.unwrap_or(pretty.format()),
             color: pretty.color(),
             stream: stream.into(),
@@ -200,10 +229,30 @@ impl Printer {
         }
     }
 
+    fn print_xml_text(&mut self, body: &str) -> io::Result<()> {
+        if !self.format_xml {
+            return self.print_syntax_text(body, "xml");
+        }
+
+        let mut buf = Vec::new();
+        if format_xml(self.xml_indent_level, body, &mut buf).is_err() {
+            return self.print_syntax_text(body, "xml");
+        }
+
+        if self.color {
+            let text = String::from_utf8_lossy(&buf);
+            self.print_colorized_text(&text, "xml")
+        } else {
+            self.buffer.write_all(&buf)?;
+            self.buffer.flush()?;
+            Ok(())
+        }
+    }
+
     fn print_body_text(&mut self, content_type: ContentType, body: &str) -> io::Result<()> {
         match content_type {
             ContentType::Json => self.print_json_text(body, true),
-            ContentType::Xml => self.print_syntax_text(body, "xml"),
+            ContentType::Xml => self.print_xml_text(body),
             ContentType::Html => self.print_syntax_text(body, "html"),
             ContentType::Css => self.print_syntax_text(body, "css"),
             // In HTTPie part of this behavior is gated behind the --json flag
@@ -300,6 +349,29 @@ impl Printer {
         }
     }
 
+    fn print_xml_stream(&mut self, stream: &mut impl Read) -> io::Result<()> {
+        if !self.format_xml {
+            return self.print_syntax_stream(stream, "xml");
+        }
+
+        if self.color {
+            let indent = self.xml_indent_level;
+            let highlighter = self.get_highlighter("xml");
+            let mut writer = HighlightingWriter {
+                buf: Vec::new(),
+                highlighter,
+            };
+            let result = format_xml_stream(indent, stream, &mut writer);
+            writer.flush()?; // drain anything left after EOF or a mid-stream error
+            result
+        } else {
+            if format_xml_stream(self.xml_indent_level, stream, &mut self.buffer).is_err() {
+                self.buffer.flush()?;
+            }
+            Ok(())
+        }
+    }
+
     fn print_body_stream(
         &mut self,
         content_type: ContentType,
@@ -307,7 +379,7 @@ impl Printer {
     ) -> io::Result<()> {
         match content_type {
             ContentType::Json => self.print_json_stream(body),
-            ContentType::Xml => self.print_syntax_stream(body, "xml"),
+            ContentType::Xml => self.print_xml_stream(body),
             ContentType::Html => self.print_syntax_stream(body, "html"),
             ContentType::Css => self.print_syntax_stream(body, "css"),
             // print_body_text() has fancy JSON detection, but we can't do that here
@@ -424,7 +496,7 @@ impl Printer {
         let stream = self.stream.unwrap_or(content_type.is_stream());
 
         if !self.buffer.is_terminal() {
-            if (self.color || self.format_json) && content_type.is_text() {
+            if (self.color || self.format_json || self.format_xml) && content_type.is_text() {
                 // The user explicitly asked for formatting even though this is
                 // going into a file, and the response is at least supposed to be
                 // text, so decode it

@@ -3101,6 +3101,7 @@ dependencies = [
  "pem",
  "percent-encoding",
  "predicates",
+ "quick-xml",
  "rand 0.8.5",
  "regex-lite",
  "reqwest",
