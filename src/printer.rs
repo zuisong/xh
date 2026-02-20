@@ -18,7 +18,7 @@ use crate::{
     cli::{Pretty, Theme},
     decoder::{decompress, get_compression_type},
     formatting::serde_json_format,
-    formatting::{format_xml, format_xml_stream, get_json_formatter, Highlighter},
+    formatting::{format_xml, get_json_formatter, Highlighter},
     middleware::ResponseExt,
     utils::{copy_largebuf, test_mode, BUFFER_SIZE},
 };
@@ -113,31 +113,6 @@ impl<'a, T: Read> BinaryGuard<'a, T> {
                 // the output buffer. (HTTPie does nothing of this kind.)
             }
         }
-    }
-}
-
-/// Wraps a [`Highlighter`] as a [`Write`] target: accumulates bytes and
-/// syntax-highlights them on each [`flush`](Write::flush) call.
-struct HighlightingWriter<'a> {
-    buf: Vec<u8>,
-    highlighter: Highlighter<'a>,
-}
-
-impl Write for HighlightingWriter<'_> {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.buf.extend_from_slice(data);
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if !self.buf.is_empty() {
-            for line in self.buf.split_inclusive(|&b| b == b'\n') {
-                self.highlighter.highlight_bytes(line)?;
-            }
-            self.highlighter.flush()?;
-            self.buf.clear();
-        }
-        Ok(())
     }
 }
 
@@ -349,29 +324,6 @@ impl Printer {
         }
     }
 
-    fn print_xml_stream(&mut self, stream: &mut impl Read) -> io::Result<()> {
-        if !self.format_xml {
-            return self.print_syntax_stream(stream, "xml");
-        }
-
-        if self.color {
-            let indent = self.xml_indent_level;
-            let highlighter = self.get_highlighter("xml");
-            let mut writer = HighlightingWriter {
-                buf: Vec::new(),
-                highlighter,
-            };
-            let result = format_xml_stream(indent, stream, &mut writer);
-            writer.flush()?; // drain anything left after EOF or a mid-stream error
-            result
-        } else {
-            if format_xml_stream(self.xml_indent_level, stream, &mut self.buffer).is_err() {
-                self.buffer.flush()?;
-            }
-            Ok(())
-        }
-    }
-
     fn print_body_stream(
         &mut self,
         content_type: ContentType,
@@ -379,7 +331,7 @@ impl Printer {
     ) -> io::Result<()> {
         match content_type {
             ContentType::Json => self.print_json_stream(body),
-            ContentType::Xml => self.print_xml_stream(body),
+            ContentType::Xml => self.print_syntax_stream(body, "xml"),
             ContentType::Html => self.print_syntax_stream(body, "html"),
             ContentType::Css => self.print_syntax_stream(body, "css"),
             // print_body_text() has fancy JSON detection, but we can't do that here
