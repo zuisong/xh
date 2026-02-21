@@ -105,9 +105,11 @@ Set output formatting options. Supported option are:
 
     json.indent:<NUM>
     json.format:<true|false>
+    xml.indent:<NUM>
+    xml.format:<true|false>
     headers.sort:<true|false>
 
-Example: --format-options=json.indent:2,headers.sort:false"
+Example: --format-options=json.indent:2,xml.indent:2,headers.sort:false"
     )]
     pub format_options: Vec<FormatOptions>,
 

@@ -210,7 +210,8 @@ impl Printer {
         }
 
         let mut buf = Vec::new();
-        if format_xml(self.xml_indent_level, body, &mut buf).is_err() {
+        if let Err(err) = format_xml(self.xml_indent_level, body, &mut buf) {
+            log::debug!("Failed to format XML: {err}");
             return self.print_syntax_text(body, "xml");
         }
 

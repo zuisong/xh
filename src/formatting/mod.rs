@@ -36,6 +36,8 @@ pub fn format_xml(indent: usize, text: &str, mut out: impl Write) -> io::Result<
             Ok(Event::Eof) => break,
             Ok(Event::Text(ref e)) if e.iter().all(|b| b.is_ascii_whitespace()) => {}
             Ok(event) => writer.write_event(event).map_err(io::Error::other)?,
+            Err(quick_xml::Error::Io(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(quick_xml::Error::Io(e)) => return Err(io::Error::new(e.kind(), e)),
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
     }
