@@ -27,7 +27,7 @@ pub fn get_json_formatter(indent_level: usize) -> jsonxf::Formatter {
 
 /// Pretty-print an XML document. Whitespace-only text nodes (typically existing
 /// indentation) are stripped so that already-formatted XML gets re-indented cleanly.
-pub fn format_xml(indent: usize, text: &str, mut out: impl Write) -> io::Result<()> {
+pub fn format_xml(indent: usize, text: &str) -> io::Result<Vec<u8>> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new_with_indent(Vec::new(), b' ', indent);
@@ -35,15 +35,13 @@ pub fn format_xml(indent: usize, text: &str, mut out: impl Write) -> io::Result<
         match reader.read_event() {
             Ok(Event::Eof) => break,
             Ok(Event::Text(ref e)) if e.iter().all(|b| b.is_ascii_whitespace()) => {}
-            Ok(event) => writer.write_event(event).map_err(io::Error::other)?,
-            Err(quick_xml::Error::Io(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(quick_xml::Error::Io(e)) => return Err(io::Error::new(e.kind(), e)),
+            Ok(event) => writer.write_event(event)?,
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
     }
-    out.write_all(writer.into_inner().as_slice())?;
-    out.write_all(b"\n\n")?;
-    Ok(())
+    let mut buf = writer.into_inner();
+    buf.extend_from_slice(b"\n\n");
+    Ok(buf)
 }
 
 /// Format a JSON value using serde. Unlike jsonxf this decodes escaped Unicode values.

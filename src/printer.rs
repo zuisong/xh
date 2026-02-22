@@ -209,11 +209,13 @@ impl Printer {
             return self.print_syntax_text(body, "xml");
         }
 
-        let mut buf = Vec::new();
-        if let Err(err) = format_xml(self.xml_indent_level, body, &mut buf) {
-            log::debug!("Failed to format XML: {err}");
-            return self.print_syntax_text(body, "xml");
-        }
+        let buf = match format_xml(self.xml_indent_level, body) {
+            Ok(buf) => buf,
+            Err(err) => {
+                log::debug!("Failed to format XML: {err}");
+                return self.print_syntax_text(body, "xml");
+            }
+        };
 
         if self.color {
             let text = String::from_utf8_lossy(&buf);
