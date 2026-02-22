@@ -830,6 +830,7 @@ pub struct MessageSignature {
     #[arg(
         long = "unstable-m-sig-alg",
         value_name = "ALG",
+        hide_possible_values = true,
         requires = "m_sig_key"
     )]
     pub m_sig_alg: Option<MessageSignatureAlgorithm>,
