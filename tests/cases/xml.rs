@@ -16,10 +16,10 @@ fn xml_pretty_printing() {
         .stdout(indoc! {r#"
             <?xml version="1.0"?>
             <catalog>
-                <book id="1">
-                    <author>Gambardella</author>
-                    <title>XML Developer Guide</title>
-                </book>
+              <book id="1">
+                <author>Gambardella</author>
+                <title>XML Developer Guide</title>
+              </book>
             </catalog>
 
 
@@ -39,7 +39,7 @@ fn xml_pretty_printing_text_xml_content_type() {
         .assert()
         .stdout(indoc! {r#"
             <root>
-                <a>text</a>
+              <a>text</a>
             </root>
 
 
@@ -75,13 +75,13 @@ fn xml_custom_indent() {
     get_command()
         .args([
             "--print=b",
-            "--format-options=xml.indent:2",
+            "--format-options=xml.indent:6",
             &server.base_url(),
         ])
         .assert()
         .stdout(indoc! {r#"
             <root>
-              <a>text</a>
+                  <a>text</a>
             </root>
 
 
@@ -116,7 +116,7 @@ fn xml_declaration_preserved() {
         .stdout(indoc! {r#"
             <?xml version="1.0" encoding="UTF-8"?>
             <root>
-                <a>text</a>
+              <a>text</a>
             </root>
 
 
@@ -164,7 +164,7 @@ fn xml_mixed_content_preserved() {
         .assert()
         .stdout(indoc! {r#"
             <root>
-                <p>Hello <b>world</b> end</p>
+              <p>Hello <b>world</b> end</p>
             </root>
 
 
@@ -184,10 +184,32 @@ fn xml_already_formatted() {
         .assert()
         .stdout(indoc! {r#"
             <root>
-                <a>
-                    <b>text</b>
-                </a>
+              <a>
+                <b>text</b>
+              </a>
             </root>
+
+
+        "#});
+}
+
+#[test]
+fn xml_xhtml_content_type() {
+    let server = server::http(|_req| async move {
+        hyper::Response::builder()
+            .header("Content-Type", "application/xhtml+xml")
+            .body("<html><body><p>hello</p></body></html>".into())
+            .unwrap()
+    });
+    get_command()
+        .args(["--print=b", &server.base_url()])
+        .assert()
+        .stdout(indoc! {r#"
+            <html>
+              <body>
+                <p>hello</p>
+              </body>
+            </html>
 
 
         "#});

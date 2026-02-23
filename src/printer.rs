@@ -140,7 +140,7 @@ impl Printer {
             format_json: format_options.json_format.unwrap_or(pretty.format()),
             json_indent_level: format_options.json_indent.unwrap_or(4),
             format_xml: format_options.xml_format.unwrap_or(pretty.format()),
-            xml_indent_level: format_options.xml_indent.unwrap_or(4),
+            xml_indent_level: format_options.xml_indent.unwrap_or(2),
             sort_headers: format_options.headers_sort.unwrap_or(pretty.format()),
             color: pretty.color(),
             stream: stream.into(),
@@ -579,10 +579,10 @@ impl From<&str> for ContentType {
     fn from(content_type: &str) -> Self {
         if content_type.contains("json") {
             ContentType::Json
-        } else if content_type.contains("html") {
-            ContentType::Html
         } else if content_type.contains("xml") {
             ContentType::Xml
+        } else if content_type.contains("html") {
+            ContentType::Html
         } else if content_type.contains("multipart") {
             ContentType::Multipart
         } else if content_type.contains("x-www-form-urlencoded") {
