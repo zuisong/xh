@@ -29,7 +29,6 @@ pub fn get_json_formatter(indent_level: usize) -> jsonxf::Formatter {
 /// indentation) are stripped so that already-formatted XML gets re-indented cleanly.
 pub fn format_xml(indent: usize, text: &str) -> io::Result<Vec<u8>> {
     let mut reader = Reader::from_str(text);
-    reader.config_mut().trim_text(false);
     let mut writer = Writer::new_with_indent(Vec::new(), b' ', indent);
     loop {
         match reader.read_event() {
