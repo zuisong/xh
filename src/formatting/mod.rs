@@ -39,9 +39,7 @@ pub fn format_xml(indent: usize, text: &str) -> io::Result<Vec<u8>> {
             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
     }
-    let mut buf = writer.into_inner();
-    buf.extend_from_slice(b"\n\n");
-    Ok(buf)
+    Ok(writer.into_inner())
 }
 
 /// Format a JSON value using serde. Unlike jsonxf this decodes escaped Unicode values.

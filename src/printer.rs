@@ -209,13 +209,14 @@ impl Printer {
             return self.print_syntax_text(body, "xml");
         }
 
-        let buf = match format_xml(self.xml_indent_level, body) {
+        let mut buf = match format_xml(self.xml_indent_level, body) {
             Ok(buf) => buf,
             Err(err) => {
                 log::debug!("Failed to format XML: {err}");
                 return self.print_syntax_text(body, "xml");
             }
         };
+        buf.extend_from_slice(b"\n\n");
 
         if self.color {
             let text = String::from_utf8_lossy(&buf);
