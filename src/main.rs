@@ -799,8 +799,6 @@ fn setup_backtraces() {
     }
 
     // SAFETY: No other threads are running at this time.
-    // (Will become unsafe in the 2024 edition.)
-    #[allow(unused_unsafe)]
     unsafe {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
