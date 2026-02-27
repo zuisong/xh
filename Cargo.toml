@@ -68,7 +68,7 @@ sanitize-filename = "0.6.0"
 quick-xml = "0.38"
 
 [dependencies.reqwest]
-version = "0.13.1"
+version = "0.13.2"
 default-features = false
 features = ["json", "form", "multipart", "blocking", "socks", "cookies", "http2", "system-proxy"]
 
