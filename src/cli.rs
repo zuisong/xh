@@ -869,6 +869,7 @@ impl MessageSignature {
             .any(|components| !components.0.is_empty())
     }
 
+    #[cfg(feature = "http-message-signatures")]
     pub fn flattened_components(&self) -> Vec<String> {
         self.m_sig_comp
             .iter()
@@ -915,7 +916,7 @@ pub enum MessageSignatureAlgorithm {
     RsaPssSha512,
 }
 
-#[cfg(feature = "message-signatures")]
+#[cfg(feature = "http-message-signatures")]
 impl From<MessageSignatureAlgorithm> for httpsig_hyper::prelude::AlgorithmName {
     fn from(value: MessageSignatureAlgorithm) -> Self {
         match value {
